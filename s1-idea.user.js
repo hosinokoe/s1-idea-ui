@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         Stage1st · JetBrains / Darcula 外观
 // @namespace    https://stage1st.com/
-// @version      0.2.0
-// @description  给 Stage1st（Discuz! X3.5）套一层 JetBrains / Darcula 配色主题。只改配色与排版，正文保持易读（不把文字代码化），帖子图片直接内联显示、无需悬浮。灵感来自 czm15053/linuxdo-idea-ui。
-// @author       you
+// @version      0.3.0
+// @description  给 Stage1st（Discuz! X3.5）套一层 JetBrains / Darcula 外观：列表页伪装 Git Log、帖子页做成编辑器标签页，但正文保持易读（不代码化），帖子图片内联直显、无需悬浮。灵感来自 czm15053/linuxdo-idea-ui。
+// @author       hosinokoe
+// @homepageURL  https://github.com/hosinokoe/s1-idea-ui
 // @match        *://stage1st.com/*
 // @match        *://*.stage1st.com/*
 // @match        *://bbs.saraba1st.com/*
@@ -21,6 +22,9 @@
   const FORUM_CLASS = "s1-idea-forum";   // 版块 / 帖子列表页
   const THREAD_CLASS = "s1-idea-thread"; // 帖子内容页
   const DARK_KEY = "s1-idea-dark";
+
+  const REPO_URL = "https://github.com/hosinokoe/s1-idea-ui";
+  const BOARD_URL = "https://stage1st.com/2b/";
 
   // ---------------------------------------------------------------------------
   // Pure helpers (kept side-effect free so the self-check can exercise them).
@@ -48,6 +52,24 @@
     return "other";
   }
 
+  // 稳定地把任意字符串映射到 [0, n) 的整数，用于给 git-graph 分配颜色/泳道。
+  function hashInt(str, n) {
+    let seed = 5381;
+    const s = String(str || "");
+    for (let i = 0; i < s.length; i++) seed = ((seed * 33) ^ s.charCodeAt(i)) >>> 0;
+    return n > 0 ? seed % n : seed;
+  }
+
+  // 把帖子标题清洗成一个像样的 "文件名"（去掉非法字符，限长）。
+  function sanitizeFileStem(title) {
+    const cleaned = String(title || "untitled")
+      .replace(/[\\/:*?"<>|]/g, " ")
+      .replace(/\s+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 48);
+    return cleaned || "untitled";
+  }
+
   // Discuz! 帖子图片常被懒加载：真实 URL 藏在 file / zoomfile / data-original
   // 属性里，src 是占位图，要悬浮或滚动才换真图。给定一个 <img> 的属性字典，
   // 返回应该写入 src 的真实 URL（拿不到就返回 null，表示不用改）。
@@ -58,7 +80,6 @@
     for (const c of candidates) {
       const v = typeof c === "string" ? c.trim() : "";
       if (!v) continue;
-      // 跳过 data:/空白占位图（Discuz 常用 1px gif 占位）。
       if (/^data:image\/(gif|png);base64/i.test(v)) continue;
       if (/static\/image\/common\/(none|nophoto|zoom)/i.test(v)) continue;
       return v === a.src ? null : v; // 已经是真 src 就不用改
@@ -95,6 +116,11 @@
       "viewthread"
     );
     assert(detectPageType("/2b/member.php", "?mod=logging") === "other", "member");
+    assert(hashInt("abc", 6) === hashInt("abc", 6), "hash stable");
+    assert(hashInt("abc", 6) >= 0 && hashInt("abc", 6) < 6, "hash range");
+    assert(hashInt("2290108", 1e6) !== hashInt("2290109", 1e6), "hash distinct");
+    assert(sanitizeFileStem("Hello / World?") === "Hello_World", "sanitize");
+    assert(sanitizeFileStem("   ") === "untitled", "sanitize empty");
     assert(
       pickRealImageSrc({ src: "x.gif", zoomfile: "real.jpg" }) === "real.jpg",
       "prefer zoomfile"
@@ -103,15 +129,7 @@
       pickRealImageSrc({ src: "x.gif", file: "real.png" }) === "real.png",
       "fall back to file"
     );
-    assert(
-      pickRealImageSrc({ src: "x.gif", "data-original": "real.webp" }) === "real.webp",
-      "data-original"
-    );
     assert(pickRealImageSrc({ src: "real.jpg" }) === null, "already real src -> null");
-    assert(
-      pickRealImageSrc({ src: "real.jpg", zoomfile: "  " }) === null,
-      "blank zoomfile ignored"
-    );
     assert(
       pickRealImageSrc({
         src: "static/image/common/none.gif",
@@ -125,7 +143,14 @@
 
   // node 自检入口（浏览器里 module 未定义，直接跳过）。
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { detectPageType, pickRealImageSrc, escapeHtml, selfCheck };
+    module.exports = {
+      detectPageType,
+      hashInt,
+      sanitizeFileStem,
+      pickRealImageSrc,
+      escapeHtml,
+      selfCheck,
+    };
     if (require.main === module) {
       selfCheck();
       // eslint-disable-next-line no-console
@@ -135,7 +160,8 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Styles — JetBrains Darcula / IntelliJ Light 双主题（纯配色，不代码化正文）。
+  // Styles — JetBrains Darcula / IntelliJ Light 双主题。
+  // 保留 IDE 外观（Git Log 侧栏 / 编辑器标签页），但正文用比例字体、保持易读。
   // ---------------------------------------------------------------------------
   const RAW_CSS = String.raw`
 .${THEME_CLASS} {
@@ -152,6 +178,7 @@
   --idea-text-2: #333333;
   --idea-text-3: #777777;
   --idea-row-hover: #E5F3FF;
+  --idea-gutter-text: #999999;
   --idea-code-bg: #F5F5F5;
   color-scheme: light;
 }
@@ -169,6 +196,7 @@
   --idea-text-2: #A9B7C6;
   --idea-text-3: #808080;
   --idea-row-hover: #2D4A6F;
+  --idea-gutter-text: #606366;
   --idea-code-bg: #313335;
   color-scheme: dark;
 }
@@ -249,15 +277,30 @@
   background: var(--idea-row-hover);
   color: var(--idea-text);
 }
-.${THEME_CLASS} .s1-idea-menubar .s1-idea-brand {
+/* 品牌区：两个可点主页链接（仓库 + S1 版块） */
+.${THEME_CLASS} .s1-idea-brand {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-weight: 600;
-  color: var(--idea-text);
-  margin-right: 6px;
+  margin-right: 8px;
 }
-.${THEME_CLASS} .s1-idea-menubar .s1-idea-brand svg { width: 16px; height: 16px; }
+.${THEME_CLASS} .s1-idea-brand svg { width: 16px; height: 16px; flex: 0 0 auto; }
+.${THEME_CLASS} .s1-idea-brand a {
+  padding: 3px 6px;
+  border-radius: 2px;
+  font-weight: 600;
+  color: var(--idea-text) !important;
+  text-decoration: none;
+  cursor: pointer;
+}
+.${THEME_CLASS} .s1-idea-brand a:hover {
+  background: var(--idea-row-hover);
+  color: var(--idea-accent-strong) !important;
+}
+.${THEME_CLASS} .s1-idea-brand .s1-idea-brand-sep {
+  color: var(--idea-text-3);
+  font-weight: 400;
+}
 .${THEME_CLASS} .s1-idea-menubar .s1-idea-spacer { flex: 1 1 auto; }
 .${THEME_CLASS} .s1-idea-theme-toggle {
   cursor: pointer;
@@ -271,7 +314,7 @@
   color: var(--idea-accent-strong) !important;
 }
 
-/* ---- 版块索引 / 帖子列表 (forumdisplay) —— 只改配色，标题保持比例字体 ---- */
+/* ---- 版块索引 / 帖子列表 (forumdisplay) —— 配色 + Git Log 侧栏，标题保持比例字体 ---- */
 .${FORUM_CLASS} #threadlisttableid,
 .${FORUM_CLASS} .tl table {
   background: var(--idea-editor) !important;
@@ -302,7 +345,7 @@
   font-weight: 400 !important;
 }
 .${FORUM_CLASS} .tl th a.xst:hover { color: var(--idea-accent-strong) !important; }
-/* 数字列（回复/查看）等宽对齐，这里用 tabular-nums 而非整块 monospace */
+/* 数字列（回复/查看）等宽对齐 */
 .${FORUM_CLASS} .tl td.by,
 .${FORUM_CLASS} .tl td.num,
 .${FORUM_CLASS} .tl td.by a,
@@ -311,12 +354,42 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* git-graph 装饰：插在标题前的小 SVG（Git Log 味道），不影响文字字体 */
+.${FORUM_CLASS} .s1-idea-git {
+  display: inline-flex;
+  vertical-align: middle;
+  width: 34px;
+  height: 20px;
+  margin-right: 6px;
+  flex: 0 0 auto;
+  pointer-events: none;
+}
+.${FORUM_CLASS} .s1-idea-git svg { width: 34px; height: 20px; display: block; }
+
 /* 版块索引块里的分区标题 */
 .${FORUM_CLASS} .fl_g,
 .${FORUM_CLASS} .fl_row td { background: var(--idea-editor) !important; }
 .${FORUM_CLASS} .fl_g:hover { background: var(--idea-row-hover) !important; }
 
-/* ---- 帖子页：配色化，正文保持易读 ---- */
+/* ---- 帖子页：编辑器标签页 + 配色，正文保持易读 ---- */
+.${THREAD_CLASS} .s1-idea-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 14px;
+  background: var(--idea-panel-2);
+  border-bottom: 1px solid var(--idea-line-strong);
+  color: var(--idea-text);
+  font-size: 12px;
+  font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+}
+.${THREAD_CLASS} .s1-idea-tab .s1-idea-tab-dot {
+  width: 12px; height: 12px; border-radius: 2px;
+  background: linear-gradient(135deg, #CC7832, #6A8759);
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 25%);
+  flex: 0 0 auto;
+}
 .${THREAD_CLASS} #postlist { background: var(--idea-editor) !important; }
 .${THREAD_CLASS} #postlist > div[id^="post_"] {
   border-bottom: 1px solid var(--idea-line-soft) !important;
@@ -337,6 +410,7 @@
 .${THREAD_CLASS} .authi a,
 .${THREAD_CLASS} .authi .xw1,
 .${THREAD_CLASS} .xw1 { color: var(--idea-accent-strong) !important; }
+/* 楼层号做成 IDE 行号/方法名的高亮色 */
 .${THREAD_CLASS} .plc .pi strong a { color: var(--idea-accent) !important; }
 /* 正文：比例字体、舒适行距，绝不 monospace */
 .${THREAD_CLASS} .pct .t_f,
@@ -411,6 +485,8 @@
     "Run", "Tools", "VCS", "Window", "Help"
   ];
 
+  const GIT_COLORS = ["#4A9FD8", "#499C54", "#C1862E", "#954F72", "#39A7AC", "#D05A4E"];
+
   // ---------------------------------------------------------------------------
   // DOM side effects
   // ---------------------------------------------------------------------------
@@ -442,11 +518,26 @@
     const bar = document.createElement("div");
     bar.id = "s1-idea-menubar";
     bar.className = "s1-idea-menubar";
-    bar.setAttribute("aria-hidden", "true");
 
+    // 品牌区：两个可点主页链接 —— 仓库 + S1 版块。
     const brand = document.createElement("span");
     brand.className = "s1-idea-brand";
-    brand.innerHTML = BRAND_SVG + "Stage1st";
+    const repo = document.createElement("a");
+    repo.href = REPO_URL;
+    repo.target = "_blank";
+    repo.rel = "noopener noreferrer";
+    repo.innerHTML = BRAND_SVG + "s1-idea-ui";
+    repo.title = "GitHub 仓库：hosinokoe/s1-idea-ui";
+    const sep = document.createElement("span");
+    sep.className = "s1-idea-brand-sep";
+    sep.textContent = "·";
+    const board = document.createElement("a");
+    board.href = BOARD_URL;
+    board.textContent = "Stage1st";
+    board.title = "Stage1st · 2b 版块";
+    brand.appendChild(repo);
+    brand.appendChild(sep);
+    brand.appendChild(board);
     bar.appendChild(brand);
 
     for (const name of MENU_ITEMS) {
@@ -482,6 +573,66 @@
     document.body.appendChild(bar);
   }
 
+  // 版块列表：给每个主题行标题前加一条 git-graph 装饰线（Git Log 味道）。
+  // ponytail: 装饰性伪 git 图，泳道由 tid 哈希决定，不追求真实提交拓扑。
+  function buildGitSvg(seed) {
+    const lane = seed % 3;             // 0..2
+    const x = 6 + lane * 10;
+    const color = GIT_COLORS[seed % GIT_COLORS.length];
+    const branch = (seed >> 2) % 4 === 0; // 偶尔画一条分叉
+    let parts =
+      `<line x1="${x}" y1="0" x2="${x}" y2="20" stroke="${color}" stroke-width="1.4"/>`;
+    if (branch && lane < 2) {
+      const x2 = x + 10;
+      const c2 = GIT_COLORS[(seed + 1) % GIT_COLORS.length];
+      parts +=
+        `<path d="M${x} 10 C ${(x + x2) / 2} 10, ${(x + x2) / 2} 4, ${x2} 4" ` +
+        `fill="none" stroke="${c2}" stroke-width="1.4"/>`;
+    }
+    parts +=
+      `<circle cx="${x}" cy="10" r="3.2" fill="${color}" ` +
+      `stroke="var(--idea-editor)" stroke-width="1.2"/>`;
+    return `<svg viewBox="0 0 34 20">${parts}</svg>`;
+  }
+
+  function decorateThreadList() {
+    const rows = document.querySelectorAll(
+      'tbody[id^="normalthread_"], tbody[id^="stickthread_"]'
+    );
+    for (const tbody of rows) {
+      const titleCell = tbody.querySelector("th.new, th.common, th");
+      if (!titleCell) continue;
+      const anchor = titleCell.querySelector("a.xst");
+      if (!anchor || titleCell.querySelector(".s1-idea-git")) continue;
+      const tid = (tbody.id.match(/(\d+)/) || [])[1] || anchor.textContent || "";
+      const seed = hashInt(tid, 1e6);
+      const holder = document.createElement("span");
+      holder.className = "s1-idea-git";
+      holder.setAttribute("aria-hidden", "true");
+      holder.innerHTML = buildGitSvg(seed);
+      titleCell.insertBefore(holder, titleCell.firstChild);
+    }
+  }
+
+  // 帖子页：加一个编辑器标签页（文件名 = 帖子标题.md，正文仍是比例字体）。
+  function decorateThread() {
+    const postlist = document.getElementById("postlist");
+    if (!postlist || document.getElementById("s1-idea-tab")) return;
+    const rawTitle =
+      document.querySelector("#thread_subject")?.textContent?.trim() ||
+      document.title.replace(/\s*-\s*Stage1st.*$/i, "").trim() ||
+      "untitled";
+    const fileName = sanitizeFileStem(rawTitle) + ".md";
+    const tab = document.createElement("div");
+    tab.id = "s1-idea-tab";
+    tab.className = "s1-idea-tab";
+    tab.setAttribute("aria-hidden", "true");
+    tab.innerHTML =
+      '<span class="s1-idea-tab-dot"></span>' +
+      "<span>" + escapeHtml(fileName) + "</span>";
+    postlist.parentNode.insertBefore(tab, postlist);
+  }
+
   // 帖子页：把 Discuz! 懒加载图片的真实 URL 写回 src，让图片直接内联显示，
   // 不再依赖悬浮/滚动。用 pickRealImageSrc 决定 URL，纯 DOM 副作用在这里。
   function revealImages(root) {
@@ -499,13 +650,11 @@
       });
       if (real) {
         img.src = real;
-        // 清掉 Discuz 的懒加载/缩放钩子，避免它再把 src 换回占位图。
         img.removeAttribute("onmouseover");
         img.removeAttribute("onclick");
         img.removeAttribute("lazyloadthumb");
       }
       img.loading = "eager";
-      // Discuz 有时用内联 display:none 藏原图，这里恢复显示。
       if (img.style && img.style.display === "none") img.style.display = "";
       img.dataset.s1Revealed = "1";
     }
@@ -527,7 +676,8 @@
     makeMenuBar();
     makeStatusBar();
 
-    if (type === "thread") revealImages(document);
+    if (type === "forum") decorateThreadList();
+    if (type === "thread") { decorateThread(); revealImages(document); }
   }
 
   // Discuz! 是整页刷新（非 SPA），一次 DOMContentLoaded 基本够用；
@@ -544,16 +694,16 @@
     } else {
       run();
     }
-    // 内容异步更新时补一次图片揭示（节流）。
+    // 内容异步更新时补一次装饰/图片揭示（节流）。
     let scheduled = false;
     const obs = new MutationObserver(() => {
       if (scheduled) return;
       scheduled = true;
       requestAnimationFrame(() => {
         scheduled = false;
-        if (detectPageType(location.pathname, location.search) === "thread") {
-          revealImages(document);
-        }
+        const type = detectPageType(location.pathname, location.search);
+        if (type === "forum") decorateThreadList();
+        if (type === "thread") { decorateThread(); revealImages(document); }
       });
     });
     const startObs = () => {

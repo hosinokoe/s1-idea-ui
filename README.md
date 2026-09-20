@@ -7,7 +7,9 @@
 ## 功能特性
 
 - 🌙 **Darcula 主题** — 默认深色 Darcula 配色，一键切换 IntelliJ Light，选择记忆在 `localStorage`
-- 🧭 **IDE 菜单条** — 顶部注入 `File Edit View …` 风格假菜单栏与 Stage1st 品牌标
+- 🧭 **IDE 菜单条** — 顶部注入 `File Edit View …` 风格假菜单栏；品牌区是两个可点主页：GitHub 仓库（`hosinokoe/s1-idea-ui`）与 Stage1st `2b` 版块
+- 🌿 **版块列表 → Git Log** — 每个主题行标题前生成伪 git-graph 装饰线（泳道 / 颜色由 tid 哈希决定），营造 IDE 版本控制视图的味道
+- 📑 **帖子页 → 编辑器标签页** — 帖子顶部注入编辑器 tab（文件名 = `帖子标题.md`）
 - 📖 **正文保持易读** — 只做配色与排版，**不把文字代码化**：正文用比例字体、舒适行距，仅真正的代码块 / 引用才用等宽字体
 - 🖼️ **图片直接内联显示** — 自动把 Discuz! 懒加载图片（`file` / `zoomfile` / `data-original`）的真实地址写回，帖子图片无需悬浮即可看到，响应式适配宽度
 - 📊 **状态栏** — 底部常驻 `UTF-8 · LF · Discuz! X3.5 · Darcula` 状态条
@@ -53,6 +55,7 @@ s1-idea-ui/
 
 - **页面类型判定** — `detectPageType()` 仅凭 URL（`forum-N-N.html` / `thread-N-N-N.html` / `mod=` 参数）判断当前是版块列表页还是帖子页，稳定且不依赖 DOM
 - **样式覆盖** — 一段 `RAW_CSS` 用 CSS 变量定义 Darcula / IntelliJ Light 两套配色，通过根节点 class（`.s1-idea-dark`）切换
+- **DOM 装饰** — 列表页用 `decorateThreadList()` 给主题行注入伪 git-graph SVG（`buildGitSvg` + `hashInt` 定泳道/颜色），帖子页用 `decorateThread()` 注入编辑器标签页（`sanitizeFileStem` 生成文件名）
 - **图片揭示** — 帖子页遍历 `<img>`，用 `pickRealImageSrc()` 从 `file` / `zoomfile` / `data-original` 里挑出真实地址写回 `src`，并清掉懒加载钩子，让图片直接内联显示
 - **非 SPA 适配** — Discuz! 为整页刷新，脚本在 `DOMContentLoaded` 后套用一次，并挂一个节流的 `MutationObserver` 兜住异步加载（如置顶折叠展开）时的列表更新
 
@@ -64,7 +67,7 @@ s1-idea-ui/
 
 ## 开发 / 测试
 
-脚本内的纯函数（`detectPageType` / `pickRealImageSrc` / `escapeHtml`）带 node 断言自检：
+脚本内的纯函数（`detectPageType` / `hashInt` / `sanitizeFileStem` / `pickRealImageSrc` / `escapeHtml`）带 node 断言自检：
 
 ```bash
 node s1-idea.user.js        # 运行内置自检
