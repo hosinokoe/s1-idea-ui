@@ -8,8 +8,8 @@
 
 - 🌙 **Darcula 主题** — 默认深色 Darcula 配色，一键切换 IntelliJ Light，选择记忆在 `localStorage`
 - 🧭 **IDE 菜单条** — 顶部注入 `File Edit View …` 风格假菜单栏与 Stage1st 品牌标
-- 🌿 **版块列表 → Git Log** — 每个主题行标题前生成伪 git-graph 装饰线（泳道/颜色由 tid 哈希决定），数字列等宽显示
-- 📝 **帖子页 → 代码编辑器** — 注入编辑器标签页（文件名 = `帖子标题.java`），正文、代码块、引用按 IDE 代码窗格样式呈现
+- 📖 **正文保持易读** — 只做配色与排版，**不把文字代码化**：正文用比例字体、舒适行距，仅真正的代码块 / 引用才用等宽字体
+- 🖼️ **图片直接内联显示** — 自动把 Discuz! 懒加载图片（`file` / `zoomfile` / `data-original`）的真实地址写回，帖子图片无需悬浮即可看到，响应式适配宽度
 - 📊 **状态栏** — 底部常驻 `UTF-8 · LF · Discuz! X3.5 · Darcula` 状态条
 
 ## 兼容站点
@@ -53,18 +53,18 @@ s1-idea-ui/
 
 - **页面类型判定** — `detectPageType()` 仅凭 URL（`forum-N-N.html` / `thread-N-N-N.html` / `mod=` 参数）判断当前是版块列表页还是帖子页，稳定且不依赖 DOM
 - **样式覆盖** — 一段 `RAW_CSS` 用 CSS 变量定义 Darcula / IntelliJ Light 两套配色，通过根节点 class（`.s1-idea-dark`）切换
-- **DOM 装饰** — 列表页给主题行注入 git-graph SVG，帖子页注入编辑器标签页
+- **图片揭示** — 帖子页遍历 `<img>`，用 `pickRealImageSrc()` 从 `file` / `zoomfile` / `data-original` 里挑出真实地址写回 `src`，并清掉懒加载钩子，让图片直接内联显示
 - **非 SPA 适配** — Discuz! 为整页刷新，脚本在 `DOMContentLoaded` 后套用一次，并挂一个节流的 `MutationObserver` 兜住异步加载（如置顶折叠展开）时的列表更新
 
 ## 已知限制
 
 - **选择器依赖 Discuz! DOM 结构** — 若 Stage1st 更换模板或升级 Discuz! 大版本，部分选择器可能失效，需更新脚本中对应规则
-- **伪 git-graph 非真实拓扑** — 泳道与分叉由主题 tid 哈希生成，仅作装饰，不反映真实回复关系
+- **图片揭示依赖 Discuz! 懒加载属性** — 靠 `file` / `zoomfile` / `data-original` 取真实地址；若模板改用其它懒加载机制则需补规则
 - **仅改外观** — 不改变任何站点数据与交互逻辑
 
 ## 开发 / 测试
 
-脚本内的纯函数（`detectPageType` / `hashInt` / `sanitizeFileStem` / `escapeHtml`）带 node 断言自检：
+脚本内的纯函数（`detectPageType` / `pickRealImageSrc` / `escapeHtml`）带 node 断言自检：
 
 ```bash
 node s1-idea.user.js        # 运行内置自检

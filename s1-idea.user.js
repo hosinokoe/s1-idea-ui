@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Stage1st · JetBrains / Darcula 外观
 // @namespace    https://stage1st.com/
-// @version      0.1.0
-// @description  把 Stage1st（Discuz! X3.5）的版块列表与帖子页换成 JetBrains IDE / Darcula 风格。仅改变外观，保留站点原有内容与交互。灵感来自 czm15053/linuxdo-idea-ui。
+// @version      0.2.0
+// @description  给 Stage1st（Discuz! X3.5）套一层 JetBrains / Darcula 配色主题。只改配色与排版，正文保持易读（不把文字代码化），帖子图片直接内联显示、无需悬浮。灵感来自 czm15053/linuxdo-idea-ui。
 // @author       you
 // @match        *://stage1st.com/*
 // @match        *://*.stage1st.com/*
@@ -48,22 +48,22 @@
     return "other";
   }
 
-  // 稳定地把任意字符串映射到 [0, n) 的整数，用于给 git-graph 分配颜色/泳道。
-  function hashInt(str, n) {
-    let seed = 5381;
-    const s = String(str || "");
-    for (let i = 0; i < s.length; i++) seed = ((seed * 33) ^ s.charCodeAt(i)) >>> 0;
-    return n > 0 ? seed % n : seed;
-  }
-
-  // 把帖子标题清洗成一个像样的 "文件名"（去掉非法字符，限长）。
-  function sanitizeFileStem(title) {
-    const cleaned = String(title || "untitled")
-      .replace(/[\\/:*?"<>|]/g, " ")
-      .replace(/\s+/g, "_")
-      .replace(/^_+|_+$/g, "")
-      .slice(0, 48);
-    return cleaned || "untitled";
+  // Discuz! 帖子图片常被懒加载：真实 URL 藏在 file / zoomfile / data-original
+  // 属性里，src 是占位图，要悬浮或滚动才换真图。给定一个 <img> 的属性字典，
+  // 返回应该写入 src 的真实 URL（拿不到就返回 null，表示不用改）。
+  // ponytail: 纯函数只做 URL 选择，DOM 读写在 revealImages 里。
+  function pickRealImageSrc(attrs) {
+    const a = attrs || {};
+    const candidates = [a.zoomfile, a.file, a["data-original"], a.src];
+    for (const c of candidates) {
+      const v = typeof c === "string" ? c.trim() : "";
+      if (!v) continue;
+      // 跳过 data:/空白占位图（Discuz 常用 1px gif 占位）。
+      if (/^data:image\/(gif|png);base64/i.test(v)) continue;
+      if (/static\/image\/common\/(none|nophoto|zoom)/i.test(v)) continue;
+      return v === a.src ? null : v; // 已经是真 src 就不用改
+    }
+    return null;
   }
 
   function escapeHtml(text) {
@@ -95,17 +95,37 @@
       "viewthread"
     );
     assert(detectPageType("/2b/member.php", "?mod=logging") === "other", "member");
-    assert(hashInt("abc", 6) === hashInt("abc", 6), "hash stable");
-    assert(hashInt("abc", 6) >= 0 && hashInt("abc", 6) < 6, "hash range");
-    assert(sanitizeFileStem("Hello / World?") === "Hello_World", "sanitize");
-    assert(sanitizeFileStem("   ") === "untitled", "sanitize empty");
+    assert(
+      pickRealImageSrc({ src: "x.gif", zoomfile: "real.jpg" }) === "real.jpg",
+      "prefer zoomfile"
+    );
+    assert(
+      pickRealImageSrc({ src: "x.gif", file: "real.png" }) === "real.png",
+      "fall back to file"
+    );
+    assert(
+      pickRealImageSrc({ src: "x.gif", "data-original": "real.webp" }) === "real.webp",
+      "data-original"
+    );
+    assert(pickRealImageSrc({ src: "real.jpg" }) === null, "already real src -> null");
+    assert(
+      pickRealImageSrc({ src: "real.jpg", zoomfile: "  " }) === null,
+      "blank zoomfile ignored"
+    );
+    assert(
+      pickRealImageSrc({
+        src: "static/image/common/none.gif",
+        file: "real.jpg",
+      }) === "real.jpg",
+      "skip placeholder src, use file"
+    );
     assert(escapeHtml('<a href="x">&') === "&lt;a href=&quot;x&quot;&gt;&amp;", "escape");
     return true;
   }
 
   // node 自检入口（浏览器里 module 未定义，直接跳过）。
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { detectPageType, hashInt, sanitizeFileStem, escapeHtml, selfCheck };
+    module.exports = { detectPageType, pickRealImageSrc, escapeHtml, selfCheck };
     if (require.main === module) {
       selfCheck();
       // eslint-disable-next-line no-console
@@ -115,7 +135,7 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Styles — JetBrains Darcula / IDEA 明亮双主题。
+  // Styles — JetBrains Darcula / IntelliJ Light 双主题（纯配色，不代码化正文）。
   // ---------------------------------------------------------------------------
   const RAW_CSS = String.raw`
 .${THEME_CLASS} {
@@ -128,15 +148,11 @@
   --idea-line: #C9C9C9;
   --idea-line-soft: #E5E5E5;
   --idea-line-strong: #A0A0A0;
-  --idea-text: #000000;
-  --idea-text-2: #444444;
+  --idea-text: #1D1D1D;
+  --idea-text-2: #333333;
   --idea-text-3: #777777;
   --idea-row-hover: #E5F3FF;
-  --idea-gutter-text: #999999;
-  --idea-kw: #0033B3;
-  --idea-str: #067D17;
-  --idea-cmt: #8C8C8C;
-  --idea-fn: #7A5D00;
+  --idea-code-bg: #F5F5F5;
   color-scheme: light;
 }
 .${THEME_CLASS}.${DARK_CLASS} {
@@ -147,21 +163,17 @@
   --idea-panel: #3C3F41;
   --idea-panel-2: #313335;
   --idea-line: #555555;
-  --idea-line-soft: #323232;
+  --idea-line-soft: #3A3A3A;
   --idea-line-strong: #282828;
-  --idea-text: #BBBBBB;
+  --idea-text: #D6D6D6;
   --idea-text-2: #A9B7C6;
   --idea-text-3: #808080;
   --idea-row-hover: #2D4A6F;
-  --idea-gutter-text: #606366;
-  --idea-kw: #CC7832;
-  --idea-str: #6A8759;
-  --idea-cmt: #808080;
-  --idea-fn: #FFC66D;
+  --idea-code-bg: #313335;
   color-scheme: dark;
 }
 
-/* Base surfaces */
+/* Base surfaces — 正文用比例字体，保持阅读体验 */
 .${THEME_CLASS},
 .${THEME_CLASS} body {
   background: var(--idea-editor) !important;
@@ -177,7 +189,6 @@
 .${THEME_CLASS} #ct,
 .${THEME_CLASS} .mn,
 .${THEME_CLASS} #ct .mn,
-.${THEME_CLASS} .bm,
 .${THEME_CLASS} .bm_c,
 .${THEME_CLASS} .comiis_top,
 .${THEME_CLASS} .tb .a,
@@ -260,11 +271,10 @@
   color: var(--idea-accent-strong) !important;
 }
 
-/* ---- 版块索引 / 帖子列表 (forumdisplay) ---- */
+/* ---- 版块索引 / 帖子列表 (forumdisplay) —— 只改配色，标题保持比例字体 ---- */
 .${FORUM_CLASS} #threadlisttableid,
 .${FORUM_CLASS} .tl table {
   background: var(--idea-editor) !important;
-  font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace !important;
 }
 .${FORUM_CLASS} .tl th,
 .${FORUM_CLASS} .tl td {
@@ -292,6 +302,7 @@
   font-weight: 400 !important;
 }
 .${FORUM_CLASS} .tl th a.xst:hover { color: var(--idea-accent-strong) !important; }
+/* 数字列（回复/查看）等宽对齐，这里用 tabular-nums 而非整块 monospace */
 .${FORUM_CLASS} .tl td.by,
 .${FORUM_CLASS} .tl td.num,
 .${FORUM_CLASS} .tl td.by a,
@@ -300,41 +311,12 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* git-graph 列：插在标题单元格前面 */
-.${FORUM_CLASS} .s1-idea-git {
-  display: inline-flex;
-  vertical-align: middle;
-  width: 34px;
-  height: 20px;
-  margin-right: 6px;
-  flex: 0 0 auto;
-  pointer-events: none;
-}
-.${FORUM_CLASS} .s1-idea-git svg { width: 34px; height: 20px; display: block; }
-
 /* 版块索引块里的分区标题 */
 .${FORUM_CLASS} .fl_g,
 .${FORUM_CLASS} .fl_row td { background: var(--idea-editor) !important; }
 .${FORUM_CLASS} .fl_g:hover { background: var(--idea-row-hover) !important; }
 
-/* ---- 帖子页：代码编辑器外观 ---- */
-.${THREAD_CLASS} .s1-idea-tab {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 30px;
-  padding: 0 14px;
-  background: var(--idea-panel-2);
-  border-bottom: 1px solid var(--idea-line-strong);
-  color: var(--idea-text);
-  font-size: 12px;
-  font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
-}
-.${THREAD_CLASS} .s1-idea-tab .s1-idea-tab-dot {
-  width: 12px; height: 12px; border-radius: 2px;
-  background: linear-gradient(135deg, #CC7832, #6A8759);
-  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 25%);
-}
+/* ---- 帖子页：配色化，正文保持易读 ---- */
 .${THREAD_CLASS} #postlist { background: var(--idea-editor) !important; }
 .${THREAD_CLASS} #postlist > div[id^="post_"] {
   border-bottom: 1px solid var(--idea-line-soft) !important;
@@ -350,36 +332,48 @@
   border-color: var(--idea-line-soft) !important;
   color: var(--idea-text-2) !important;
 }
-/* 作者栏 -> 侧边身份注释 */
 .${THREAD_CLASS} .pls,
 .${THREAD_CLASS} .pls .favatar { border-color: var(--idea-line-soft) !important; }
 .${THREAD_CLASS} .authi a,
 .${THREAD_CLASS} .authi .xw1,
 .${THREAD_CLASS} .xw1 { color: var(--idea-accent-strong) !important; }
-/* 楼层号做成行号风格 */
-.${THREAD_CLASS} .plc .pi strong a { color: var(--idea-fn) !important; }
-/* 帖子正文当作代码窗格 */
+.${THREAD_CLASS} .plc .pi strong a { color: var(--idea-accent) !important; }
+/* 正文：比例字体、舒适行距，绝不 monospace */
 .${THREAD_CLASS} .pct .t_f,
 .${THREAD_CLASS} td.t_f {
   padding: 12px 16px !important;
   color: var(--idea-text) !important;
-  font-size: 14px !important;
-  line-height: 1.7 !important;
+  font-size: 15px !important;
+  line-height: 1.75 !important;
   background: var(--idea-editor) !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif !important;
 }
-.${THREAD_CLASS} .pct .t_f .s1-idea-gutterline {
-  color: var(--idea-gutter-text);
-  font-family: "JetBrains Mono", Menlo, Consolas, monospace;
-  user-select: none;
+/* 帖子图片：内联直显、响应式，不再靠悬浮 */
+.${THREAD_CLASS} .t_f img,
+.${THREAD_CLASS} .pcb img {
+  max-width: 100% !important;
+  height: auto !important;
+  cursor: zoom-in;
 }
-/* Discuz! 代码块 / quote 更贴近 IDE */
+/* 真正的代码块 / 引用才用等宽字体 */
 .${THREAD_CLASS} .blockcode,
-.${THREAD_CLASS} .quote blockquote {
-  background: var(--idea-panel-2) !important;
+.${THREAD_CLASS} .blockcode ol,
+.${THREAD_CLASS} .blockcode li,
+.${THREAD_CLASS} pre,
+.${THREAD_CLASS} code {
+  background: var(--idea-code-bg) !important;
   border: 1px solid var(--idea-line) !important;
   border-radius: 3px !important;
   color: var(--idea-text-2) !important;
-  font-family: "JetBrains Mono", Menlo, Consolas, monospace !important;
+  font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace !important;
+}
+.${THREAD_CLASS} .quote blockquote {
+  background: var(--idea-code-bg) !important;
+  border-left: 3px solid var(--idea-accent-soft) !important;
+  border-radius: 0 3px 3px 0 !important;
+  color: var(--idea-text-2) !important;
+  padding: 8px 12px !important;
 }
 
 /* ---- 状态栏 ---- */
@@ -416,8 +410,6 @@
     "File", "Edit", "View", "Navigate", "Code", "Refactor",
     "Run", "Tools", "VCS", "Window", "Help"
   ];
-
-  const GIT_COLORS = ["#4A9FD8", "#499C54", "#C1862E", "#954F72", "#39A7AC", "#D05A4E"];
 
   // ---------------------------------------------------------------------------
   // DOM side effects
@@ -470,7 +462,9 @@
     const toggle = document.createElement("span");
     toggle.className = "s1-idea-theme-toggle";
     toggle.textContent = isDark() ? "Darcula" : "IntelliJ Light";
-    toggle.addEventListener("click", () => setDark(!document.documentElement.classList.contains(DARK_CLASS)));
+    toggle.addEventListener("click", () =>
+      setDark(!document.documentElement.classList.contains(DARK_CLASS))
+    );
     bar.appendChild(toggle);
 
     document.body.insertBefore(bar, document.body.firstChild);
@@ -483,69 +477,38 @@
     bar.className = "s1-idea-statusbar";
     bar.setAttribute("aria-hidden", "true");
     bar.innerHTML =
-      "<span>UTF-8</span><span>LF</span><span>4 spaces</span>" +
+      "<span>UTF-8</span><span>LF</span>" +
       "<span>Discuz! X3.5</span><span>Darcula · Stage1st</span>";
     document.body.appendChild(bar);
   }
 
-  // 版块列表：给每个主题行标题前加一条 git-graph 装饰线。
-  // ponytail: 装饰性伪 git 图，泳道由 tid 哈希决定，不追求真实提交拓扑。
-  function buildGitSvg(seed) {
-    const lane = seed % 3;             // 0..2
-    const x = 6 + lane * 10;
-    const color = GIT_COLORS[seed % GIT_COLORS.length];
-    const branch = (seed >> 2) % 4 === 0; // 偶尔画一条分叉
-    let parts =
-      `<line x1="${x}" y1="0" x2="${x}" y2="20" stroke="${color}" stroke-width="1.4"/>`;
-    if (branch && lane < 2) {
-      const x2 = x + 10;
-      const c2 = GIT_COLORS[(seed + 1) % GIT_COLORS.length];
-      parts +=
-        `<path d="M${x} 10 C ${(x + x2) / 2} 10, ${(x + x2) / 2} 4, ${x2} 4" ` +
-        `fill="none" stroke="${c2}" stroke-width="1.4"/>`;
-    }
-    parts +=
-      `<circle cx="${x}" cy="10" r="3.2" fill="${color}" ` +
-      `stroke="var(--idea-editor)" stroke-width="1.2"/>`;
-    return `<svg viewBox="0 0 34 20">${parts}</svg>`;
-  }
-
-  function decorateThreadList() {
-    const rows = document.querySelectorAll(
-      'tbody[id^="normalthread_"], tbody[id^="stickthread_"]'
+  // 帖子页：把 Discuz! 懒加载图片的真实 URL 写回 src，让图片直接内联显示，
+  // 不再依赖悬浮/滚动。用 pickRealImageSrc 决定 URL，纯 DOM 副作用在这里。
+  function revealImages(root) {
+    const scope = root || document;
+    const imgs = scope.querySelectorAll(
+      ".t_f img, .pcb img, img[file], img[zoomfile], img[data-original]"
     );
-    for (const tbody of rows) {
-      const titleCell = tbody.querySelector("th.new, th.common, th");
-      if (!titleCell) continue;
-      const anchor = titleCell.querySelector("a.xst");
-      if (!anchor || titleCell.querySelector(".s1-idea-git")) continue;
-      const tid = (tbody.id.match(/(\d+)/) || [])[1] || anchor.textContent || "";
-      const seed = hashInt(tid, 1_000_000);
-      const holder = document.createElement("span");
-      holder.className = "s1-idea-git";
-      holder.setAttribute("aria-hidden", "true");
-      holder.innerHTML = buildGitSvg(seed);
-      titleCell.insertBefore(holder, titleCell.firstChild);
+    for (const img of imgs) {
+      if (img.dataset.s1Revealed === "1") continue;
+      const real = pickRealImageSrc({
+        src: img.getAttribute("src") || "",
+        file: img.getAttribute("file") || "",
+        zoomfile: img.getAttribute("zoomfile") || "",
+        "data-original": img.getAttribute("data-original") || "",
+      });
+      if (real) {
+        img.src = real;
+        // 清掉 Discuz 的懒加载/缩放钩子，避免它再把 src 换回占位图。
+        img.removeAttribute("onmouseover");
+        img.removeAttribute("onclick");
+        img.removeAttribute("lazyloadthumb");
+      }
+      img.loading = "eager";
+      // Discuz 有时用内联 display:none 藏原图，这里恢复显示。
+      if (img.style && img.style.display === "none") img.style.display = "";
+      img.dataset.s1Revealed = "1";
     }
-  }
-
-  // 帖子页：加一个编辑器标签页（文件名 = 帖子标题.java）。
-  function decorateThread() {
-    const postlist = document.getElementById("postlist");
-    if (!postlist || document.getElementById("s1-idea-tab")) return;
-    const rawTitle =
-      document.querySelector("#thread_subject")?.textContent?.trim() ||
-      document.title.replace(/\s*-\s*Stage1st.*$/i, "").trim() ||
-      "untitled";
-    const fileName = sanitizeFileStem(rawTitle) + ".java";
-    const tab = document.createElement("div");
-    tab.id = "s1-idea-tab";
-    tab.className = "s1-idea-tab";
-    tab.setAttribute("aria-hidden", "true");
-    tab.innerHTML =
-      '<span class="s1-idea-tab-dot"></span>' +
-      '<span>' + escapeHtml(fileName) + '</span>';
-    postlist.parentNode.insertBefore(tab, postlist);
   }
 
   function apply() {
@@ -564,12 +527,11 @@
     makeMenuBar();
     makeStatusBar();
 
-    if (type === "forum") decorateThreadList();
-    if (type === "thread") decorateThread();
+    if (type === "thread") revealImages(document);
   }
 
   // Discuz! 是整页刷新（非 SPA），一次 DOMContentLoaded 基本够用；
-  // 但异步加载（如置顶折叠）会改列表，故轻量观察一次 body。
+  // 但异步加载（如楼层展开、图片懒加载替换）会改内容，故轻量观察一次 body。
   function bootstrap() {
     if (!document.documentElement) { setTimeout(bootstrap, 0); return; }
     injectStyle();
@@ -582,16 +544,16 @@
     } else {
       run();
     }
-    // 列表异步更新时补一次装饰（节流）。
+    // 内容异步更新时补一次图片揭示（节流）。
     let scheduled = false;
     const obs = new MutationObserver(() => {
       if (scheduled) return;
       scheduled = true;
       requestAnimationFrame(() => {
         scheduled = false;
-        const type = detectPageType(location.pathname, location.search);
-        if (type === "forum") decorateThreadList();
-        if (type === "thread") decorateThread();
+        if (detectPageType(location.pathname, location.search) === "thread") {
+          revealImages(document);
+        }
       });
     });
     const startObs = () => {
