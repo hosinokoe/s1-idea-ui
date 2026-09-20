@@ -632,11 +632,13 @@
   }
 
   // ---- 把 .t_f 正文节点转成一行行「代码」HTML（参考 collectCookedLineHtml） ----
+  // 预览图直接带真实 src（loading=lazy 避免一次性全部预载），悬浮/聚焦的显示
+  // 纯靠 CSS 切 display，无需 JS 再填 src——这正是参考脚本「悬浮即显」的做法。
   function buildImageLineHtml(src) {
     const safe = escapeHtml(src);
     return (
       '<span class="s1-cmt">// image: ' + safe + "</span>" +
-      '<img class="s1-code-image-preview" loading="lazy" alt="image" data-src="' + safe + '">'
+      '<img class="s1-code-image-preview" loading="lazy" alt="image" src="' + safe + '">'
     );
   }
 
@@ -699,22 +701,13 @@
     return lines;
   }
 
+  // 悬浮 / 聚焦显示由 CSS 负责；JS 只处理「点击固定 / 取消固定」。
   function bindCodeImageHover(root) {
     for (const line of root.querySelectorAll(".s1-code-line.s1-code-image")) {
       if (line.dataset.s1Bound === "1") continue;
       line.dataset.s1Bound = "1";
-      const reveal = () => {
-        line.classList.add("is-open");
-        for (const img of line.querySelectorAll(".s1-code-image-preview")) {
-          const src = img.getAttribute("data-src") || "";
-          if (src && img.getAttribute("src") !== src) img.setAttribute("src", src);
-        }
-      };
-      line.addEventListener("mouseenter", reveal);
-      line.addEventListener("focus", reveal);
       line.addEventListener("click", () => {
-        if (line.classList.contains("is-pinned")) line.classList.remove("is-pinned", "is-open");
-        else { line.classList.add("is-pinned"); reveal(); }
+        line.classList.toggle("is-pinned");
       });
     }
   }
