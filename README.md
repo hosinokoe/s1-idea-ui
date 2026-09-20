@@ -9,10 +9,10 @@
 - 🌙 **Darcula 主题** — 默认深色 Darcula 配色，一键切换 IntelliJ Light，选择记忆在 `localStorage`
 - 🧭 **IDE 菜单条** — 顶部注入 `File Edit View …` 风格假菜单栏；品牌区是两个可点主页：GitHub 仓库（`hosinokoe/s1-idea-ui`）与 Stage1st `2b` 版块
 - 🌿 **版块列表 → Git Log** — 每个主题行标题前生成伪 git-graph 装饰线（泳道 / 颜色由 tid 哈希决定），营造 IDE 版本控制视图的味道
-- 📑 **帖子页 → 编辑器标签页** — 帖子顶部注入编辑器 tab（文件名 = `帖子标题.md`）
-- 📖 **正文保持易读** — 只做配色与排版，**不把文字代码化**：正文用比例字体、舒适行距，仅真正的代码块 / 引用才用等宽字体
-- 🖼️ **图片直接内联显示** — 自动把 Discuz! 懒加载图片（`file` / `zoomfile` / `data-original`）的真实地址写回，帖子图片无需悬浮即可看到，响应式适配宽度
-- 📊 **状态栏** — 底部常驻 `UTF-8 · LF · Discuz! X3.5 · Darcula` 状态条
+- 📑 **帖子页 → 编辑器标签页** — 帖子顶部注入编辑器 tab（文件名 = `帖子标题.java`）
+- 💻 **帖子正文 → 代码编辑器** — 每楼正文渲染成带**行号 gutter** 的代码框：1 楼生成假 Java 头（`package` / `import` / Javadoc `@author @floor @since` / `public class 标题`），回帖变成 `void reply_作者_楼层() { … }` 方法；正文文字化为 `//` 注释行，真代码块夹在 `// ----- code -----` 之间，配语法高亮（关键字 / 字符串 / 方法名 / 注释）
+- 🖼️ **图片折叠预览** — 图片渲染成一行 `// image` 注释，默认收起，**悬浮 / 聚焦 / 点击固定**才展开预览（沿用参考脚本的折叠交互）
+- 📊 **状态栏** — 底部常驻 `UTF-8 · 4 spaces · Java · Discuz! X3.5 · Darcula` 状态条
 
 ## 兼容站点
 
@@ -56,18 +56,20 @@ s1-idea-ui/
 - **页面类型判定** — `detectPageType()` 仅凭 URL（`forum-N-N.html` / `thread-N-N-N.html` / `mod=` 参数）判断当前是版块列表页还是帖子页，稳定且不依赖 DOM
 - **样式覆盖** — 一段 `RAW_CSS` 用 CSS 变量定义 Darcula / IntelliJ Light 两套配色，通过根节点 class（`.s1-idea-dark`）切换
 - **DOM 装饰** — 列表页用 `decorateThreadList()` 给主题行注入伪 git-graph SVG（`buildGitSvg` + `hashInt` 定泳道/颜色），帖子页用 `decorateThread()` 注入编辑器标签页（`sanitizeFileStem` 生成文件名）
-- **图片揭示** — 帖子页遍历 `<img>`，用 `pickRealImageSrc()` 从 `file` / `zoomfile` / `data-original` 里挑出真实地址写回 `src`，并清掉懒加载钩子，让图片直接内联显示
+- **正文代码化** — 帖子页 `syncCodeFrames()` 给每楼 `.t_f` 建一个「行号 gutter + 代码窗格」代码框并隐藏原正文：`buildHeaderLines()` 生成 1 楼类头 / 回帖方法头，`collectBodyLines()` 把正文文本转 `//` 注释行、`<pre>` 转代码块、`<img>` 转 `// image` 折叠行，`highlightCode()` 做正则语法着色
+- **图片折叠** — 图片行默认收起，`bindCodeImageHover()` 绑定悬浮 / 聚焦即时预览、点击固定展开；真实地址由 `pickRealImageSrc()` 从 `file` / `zoomfile` / `data-original` 挑出
 - **非 SPA 适配** — Discuz! 为整页刷新，脚本在 `DOMContentLoaded` 后套用一次，并挂一个节流的 `MutationObserver` 兜住异步加载（如置顶折叠展开）时的列表更新
 
 ## 已知限制
 
-- **选择器依赖 Discuz! DOM 结构** — 若 Stage1st 更换模板或升级 Discuz! 大版本，部分选择器可能失效，需更新脚本中对应规则
-- **图片揭示依赖 Discuz! 懒加载属性** — 靠 `file` / `zoomfile` / `data-original` 取真实地址；若模板改用其它懒加载机制则需补规则
+- **选择器依赖 Discuz! DOM 结构** — 若 Stage1st 更换模板或升级 Discuz! 大版本，作者 / 楼层 / 时间 / 正文选择器可能失效，需更新脚本中对应规则
+- **语法着色是启发式** — `highlightCode()` 用正则做关键字 / 字符串 / 注释着色，非真正词法分析，复杂内容可能着色不准
+- **图片默认收起** — 图片渲染成 `// image` 注释行，需悬浮 / 聚焦 / 点击才展开预览（照搬参考脚本的交互）
 - **仅改外观** — 不改变任何站点数据与交互逻辑
 
 ## 开发 / 测试
 
-脚本内的纯函数（`detectPageType` / `hashInt` / `sanitizeFileStem` / `pickRealImageSrc` / `escapeHtml`）带 node 断言自检：
+脚本内的纯函数（`detectPageType` / `hashInt` / `sanitizeFileStem` / `sanitizeIdent` / `pickRealImageSrc` / `wrapPlainText` / `highlightCode` / `escapeHtml`）带 node 断言自检：
 
 ```bash
 node s1-idea.user.js        # 运行内置自检

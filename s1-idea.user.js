@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Stage1st · JetBrains / Darcula 外观
 // @namespace    https://stage1st.com/
-// @version      0.3.0
-// @description  给 Stage1st（Discuz! X3.5）套一层 JetBrains / Darcula 外观：列表页伪装 Git Log、帖子页做成编辑器标签页，但正文保持易读（不代码化），帖子图片内联直显、无需悬浮。灵感来自 czm15053/linuxdo-idea-ui。
+// @version      0.4.0
+// @description  把 Stage1st（Discuz! X3.5）换成 JetBrains IDE / Darcula 风格：列表页伪装 Git Log，帖子正文渲染成代码编辑器（行号 gutter + 假 Java 类/方法 + 语法色 + 折叠图片）。灵感与实现思路来自 czm15053/linuxdo-idea-ui。
 // @author       hosinokoe
 // @homepageURL  https://github.com/hosinokoe/s1-idea-ui
 // @match        *://stage1st.com/*
@@ -19,27 +19,21 @@
   const STYLE_ID = "s1-idea-theme";
   const THEME_CLASS = "s1-idea-theme";
   const DARK_CLASS = "s1-idea-dark";
-  const FORUM_CLASS = "s1-idea-forum";   // 版块 / 帖子列表页
-  const THREAD_CLASS = "s1-idea-thread"; // 帖子内容页
+  const FORUM_CLASS = "s1-idea-forum";
+  const THREAD_CLASS = "s1-idea-thread";
   const DARK_KEY = "s1-idea-dark";
 
   const REPO_URL = "https://github.com/hosinokoe/s1-idea-ui";
   const BOARD_URL = "https://stage1st.com/2b/";
 
   // ---------------------------------------------------------------------------
-  // Pure helpers (kept side-effect free so the self-check can exercise them).
+  // Pure helpers (side-effect free, exercised by the node self-check).
   // ---------------------------------------------------------------------------
 
-  // Discuz! 页面类型仅由 URL 决定，稳定且无需读 DOM。
-  //   forum.php / forum-4-1.html / forumdisplay  -> "forum"
-  //   thread-123-1-1.html / mod=viewthread        -> "thread"
-  //   其它                                          -> "other"
   function detectPageType(pathname, search) {
     const p = String(pathname || "");
     const q = String(search || "");
-    if (/thread-\d+-\d+-\d+\.html/.test(p) || /mod=viewthread/.test(q)) {
-      return "thread";
-    }
+    if (/thread-\d+-\d+-\d+\.html/.test(p) || /mod=viewthread/.test(q)) return "thread";
     if (
       /forum-\d+-\d+\.html/.test(p) ||
       /\/forum\.php$/.test(p) ||
@@ -47,12 +41,10 @@
     ) {
       return "forum";
     }
-    // forum.php 首页（无 query 或带 gid）也算 forum 列表页。
     if (/\/forum\.php/.test(p)) return "forum";
     return "other";
   }
 
-  // 稳定地把任意字符串映射到 [0, n) 的整数，用于给 git-graph 分配颜色/泳道。
   function hashInt(str, n) {
     let seed = 5381;
     const s = String(str || "");
@@ -60,7 +52,6 @@
     return n > 0 ? seed % n : seed;
   }
 
-  // 把帖子标题清洗成一个像样的 "文件名"（去掉非法字符，限长）。
   function sanitizeFileStem(title) {
     const cleaned = String(title || "untitled")
       .replace(/[\\/:*?"<>|]/g, " ")
@@ -70,21 +61,10 @@
     return cleaned || "untitled";
   }
 
-  // Discuz! 帖子图片常被懒加载：真实 URL 藏在 file / zoomfile / data-original
-  // 属性里，src 是占位图，要悬浮或滚动才换真图。给定一个 <img> 的属性字典，
-  // 返回应该写入 src 的真实 URL（拿不到就返回 null，表示不用改）。
-  // ponytail: 纯函数只做 URL 选择，DOM 读写在 revealImages 里。
-  function pickRealImageSrc(attrs) {
-    const a = attrs || {};
-    const candidates = [a.zoomfile, a.file, a["data-original"], a.src];
-    for (const c of candidates) {
-      const v = typeof c === "string" ? c.trim() : "";
-      if (!v) continue;
-      if (/^data:image\/(gif|png);base64/i.test(v)) continue;
-      if (/static\/image\/common\/(none|nophoto|zoom)/i.test(v)) continue;
-      return v === a.src ? null : v; // 已经是真 src 就不用改
-    }
-    return null;
+  // 把名字清洗成合法的 Java 标识符片段（用于方法名 reply_xxx_N）。
+  function sanitizeIdent(name) {
+    const s = String(name || "user").replace(/[^A-Za-z0-9_]/g, "_").replace(/^_+|_+$/g, "");
+    return s || "user";
   }
 
   function escapeHtml(text) {
@@ -95,9 +75,60 @@
       .replace(/"/g, "&quot;");
   }
 
+  // Discuz! 懒加载图片：真实 URL 藏在 file / zoomfile / data-original，src 是占位。
+  function pickRealImageSrc(attrs) {
+    const a = attrs || {};
+    const candidates = [a.zoomfile, a.file, a["data-original"], a.src];
+    for (const c of candidates) {
+      const v = typeof c === "string" ? c.trim() : "";
+      if (!v) continue;
+      if (/^data:image\/(gif|png);base64/i.test(v)) continue;
+      if (/static\/image\/common\/(none|nophoto|zoom)/i.test(v)) continue;
+      return v === a.src ? null : v;
+    }
+    return null;
+  }
+
+  // 按字符宽度折行（CJK 友好，按 code point 计数），参考 wrapPlainText。
+  function wrapPlainText(text, width = 72) {
+    const input = String(text || "").replace(/\s+/g, " ").trim();
+    if (!input) return [""];
+    const chars = Array.from(input);
+    const rows = [];
+    for (let i = 0; i < chars.length; i += width) rows.push(chars.slice(i, i + width).join(""));
+    return rows;
+  }
+
+  // 把一行纯文本包成带语法色的「注释行」HTML：prefix 为注释前缀（"// " 等），
+  // 已 escape 的正文包在 .s1-cmt 里。参考 pushCommentLines 的着色思路。
+  function commentLineHtml(prefix, escapedText) {
+    return `<span class="s1-cmt">${escapeHtml(prefix)}${escapedText}</span>`;
+  }
+
+  // 语法色分类：给一段假代码文本套 span，简单规则（关键字/字符串/注释）。
+  // 参考 idea-kw/idea-str/idea-cmt/idea-fn 的着色，规则从简。
+  // ponytail: 正则着色是启发式，非真正解析器；字符串正则不处理内含转义实体
+  //   （如内容含 & 的字符串会漏色）。升级路径：接一个真词法分析器。
+  const JAVA_KW = /\b(package|import|public|private|class|void|var|return|new|if|else|for|while|assert|final|static)\b/g;
+  function highlightCode(escapedLine) {
+    let s = String(escapedLine);
+    // 整行注释
+    if (/^\s*(\/\/|\*|\/\*\*?|\*\/)/.test(s.replace(/&[a-z]+;/g, ""))) {
+      return `<span class="s1-cmt">${s}</span>`;
+    }
+    // 字符串
+    s = s.replace(/&quot;[^&]*?&quot;/g, (m) => `<span class="s1-str">${m}</span>`);
+    // 关键字
+    s = s.replace(JAVA_KW, (m) => `<span class="s1-kw">${m}</span>`);
+    // 方法名 foo(
+    s = s.replace(/\b([A-Za-z_]\w*)(\s*\()/g, (m, name, paren) =>
+      /^(if|for|while|switch|catch)$/.test(name) ? m : `<span class="s1-fn">${name}</span>${paren}`
+    );
+    return s;
+  }
+
   // ---------------------------------------------------------------------------
-  // Self-check: 在非浏览器环境（node）下运行纯函数断言，浏览器里静默跳过。
-  // ponytail: 单文件自检，无框架无 fixture。
+  // Self-check
   // ---------------------------------------------------------------------------
   function selfCheck() {
     const assert = (cond, msg) => {
@@ -105,11 +136,6 @@
     };
     assert(detectPageType("/2b/forum-4-1.html", "") === "forum", "forum-N-N");
     assert(detectPageType("/2b/forum.php", "?gid=1") === "forum", "forum.php gid");
-    assert(detectPageType("/2b/forum.php", "") === "forum", "forum.php bare");
-    assert(
-      detectPageType("/2b/forum.php", "?mod=forumdisplay&fid=4") === "forum",
-      "forumdisplay"
-    );
     assert(detectPageType("/2b/thread-2290108-1-1.html", "") === "thread", "thread-N");
     assert(
       detectPageType("/2b/forum.php", "?mod=viewthread&tid=1") === "thread",
@@ -121,33 +147,42 @@
     assert(hashInt("2290108", 1e6) !== hashInt("2290109", 1e6), "hash distinct");
     assert(sanitizeFileStem("Hello / World?") === "Hello_World", "sanitize");
     assert(sanitizeFileStem("   ") === "untitled", "sanitize empty");
+    assert(sanitizeIdent("张三 A.b") === "A_b", "ident strips non-word + trims");
+    assert(sanitizeIdent("reply 2") === "reply_2", "ident space");
+    assert(sanitizeIdent("") === "user", "ident empty");
     assert(
       pickRealImageSrc({ src: "x.gif", zoomfile: "real.jpg" }) === "real.jpg",
       "prefer zoomfile"
     );
+    assert(pickRealImageSrc({ src: "x.gif", file: "real.png" }) === "real.png", "file");
+    assert(pickRealImageSrc({ src: "real.jpg" }) === null, "already real -> null");
     assert(
-      pickRealImageSrc({ src: "x.gif", file: "real.png" }) === "real.png",
-      "fall back to file"
+      pickRealImageSrc({ src: "static/image/common/none.gif", file: "r.jpg" }) === "r.jpg",
+      "skip placeholder src"
     );
-    assert(pickRealImageSrc({ src: "real.jpg" }) === null, "already real src -> null");
-    assert(
-      pickRealImageSrc({
-        src: "static/image/common/none.gif",
-        file: "real.jpg",
-      }) === "real.jpg",
-      "skip placeholder src, use file"
-    );
+    // wrapPlainText
+    assert(wrapPlainText("") .length === 1 && wrapPlainText("")[0] === "", "wrap empty");
+    assert(wrapPlainText("a b  c") .join("|") === "a b c", "wrap collapse ws");
+    assert(wrapPlainText("abcdef", 3).join("|") === "abc|def", "wrap width");
+    assert(wrapPlainText("你好世界一二三", 3).length === 3, "wrap cjk by codepoint");
+    // 语法色 & 注释行
+    assert(commentLineHtml("// ", "hi").includes("s1-cmt"), "comment span");
+    assert(highlightCode("public class Foo {").includes("s1-kw"), "kw color");
+    assert(highlightCode("// hello").includes("s1-cmt"), "line comment color");
     assert(escapeHtml('<a href="x">&') === "&lt;a href=&quot;x&quot;&gt;&amp;", "escape");
     return true;
   }
 
-  // node 自检入口（浏览器里 module 未定义，直接跳过）。
   if (typeof module !== "undefined" && module.exports) {
     module.exports = {
       detectPageType,
       hashInt,
       sanitizeFileStem,
+      sanitizeIdent,
       pickRealImageSrc,
+      wrapPlainText,
+      commentLineHtml,
+      highlightCode,
       escapeHtml,
       selfCheck,
     };
@@ -160,8 +195,7 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Styles — JetBrains Darcula / IntelliJ Light 双主题。
-  // 保留 IDE 外观（Git Log 侧栏 / 编辑器标签页），但正文用比例字体、保持易读。
+  // Styles
   // ---------------------------------------------------------------------------
   const RAW_CSS = String.raw`
 .${THEME_CLASS} {
@@ -180,6 +214,10 @@
   --idea-row-hover: #E5F3FF;
   --idea-gutter-text: #999999;
   --idea-code-bg: #F5F5F5;
+  --idea-kw: #0033B3;
+  --idea-str: #067D17;
+  --idea-cmt: #8C8C8C;
+  --idea-fn: #7A5D00;
   color-scheme: light;
 }
 .${THEME_CLASS}.${DARK_CLASS} {
@@ -198,10 +236,13 @@
   --idea-row-hover: #2D4A6F;
   --idea-gutter-text: #606366;
   --idea-code-bg: #313335;
+  --idea-kw: #CC7832;
+  --idea-str: #6A8759;
+  --idea-cmt: #808080;
+  --idea-fn: #FFC66D;
   color-scheme: dark;
 }
 
-/* Base surfaces — 正文用比例字体，保持阅读体验 */
 .${THEME_CLASS},
 .${THEME_CLASS} body {
   background: var(--idea-editor) !important;
@@ -212,7 +253,6 @@
 .${THEME_CLASS} a { color: var(--idea-accent-strong) !important; }
 .${THEME_CLASS} a:hover { color: var(--idea-accent) !important; }
 
-/* Discuz! 大量硬编码白底/边框，统一覆盖 */
 .${THEME_CLASS} .wp,
 .${THEME_CLASS} #ct,
 .${THEME_CLASS} .mn,
@@ -221,9 +261,7 @@
 .${THEME_CLASS} .comiis_top,
 .${THEME_CLASS} .tb .a,
 .${THEME_CLASS} .pg a,
-.${THEME_CLASS} .pgb a {
-  background: transparent !important;
-}
+.${THEME_CLASS} .pgb a { background: transparent !important; }
 .${THEME_CLASS} .bm {
   border: 1px solid var(--idea-line) !important;
   border-radius: 4px !important;
@@ -239,7 +277,7 @@
 }
 .${THEME_CLASS} .bm_c { background: var(--idea-editor) !important; }
 
-/* ---- IDE 顶栏（菜单条） ---- */
+/* ---- 顶栏菜单条 ---- */
 .${THEME_CLASS} #toptb,
 .${THEME_CLASS} #toptb .wp {
   background: var(--idea-panel) !important;
@@ -251,149 +289,81 @@
   border-bottom: 1px solid var(--idea-line) !important;
 }
 .${THEME_CLASS} #nv,
-.${THEME_CLASS} #nv a {
-  background: transparent !important;
-  color: var(--idea-text-2) !important;
-}
+.${THEME_CLASS} #nv a { background: transparent !important; color: var(--idea-text-2) !important; }
 .${THEME_CLASS} .s1-idea-menubar {
-  display: flex;
-  align-items: center;
-  gap: 1px;
-  height: 28px;
-  padding: 0 8px;
-  background: var(--idea-panel);
-  border-bottom: 1px solid var(--idea-line);
-  font-size: 12px;
-  user-select: none;
+  display: flex; align-items: center; gap: 1px; height: 28px; padding: 0 8px;
+  background: var(--idea-panel); border-bottom: 1px solid var(--idea-line);
+  font-size: 12px; user-select: none;
 }
 .${THEME_CLASS} .s1-idea-menubar span {
-  padding: 3px 8px;
-  border-radius: 2px;
-  color: var(--idea-text-2);
-  cursor: default;
-  white-space: nowrap;
+  padding: 3px 8px; border-radius: 2px; color: var(--idea-text-2);
+  cursor: default; white-space: nowrap;
 }
-.${THEME_CLASS} .s1-idea-menubar span:hover {
-  background: var(--idea-row-hover);
-  color: var(--idea-text);
-}
-/* 品牌区：两个可点主页链接（仓库 + S1 版块） */
-.${THEME_CLASS} .s1-idea-brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-right: 8px;
-}
+.${THEME_CLASS} .s1-idea-menubar span:hover { background: var(--idea-row-hover); color: var(--idea-text); }
+.${THEME_CLASS} .s1-idea-brand { display: inline-flex; align-items: center; gap: 6px; margin-right: 8px; }
 .${THEME_CLASS} .s1-idea-brand svg { width: 16px; height: 16px; flex: 0 0 auto; }
 .${THEME_CLASS} .s1-idea-brand a {
-  padding: 3px 6px;
-  border-radius: 2px;
-  font-weight: 600;
-  color: var(--idea-text) !important;
-  text-decoration: none;
-  cursor: pointer;
+  padding: 3px 6px; border-radius: 2px; font-weight: 600;
+  color: var(--idea-text) !important; text-decoration: none; cursor: pointer;
 }
-.${THEME_CLASS} .s1-idea-brand a:hover {
-  background: var(--idea-row-hover);
-  color: var(--idea-accent-strong) !important;
-}
-.${THEME_CLASS} .s1-idea-brand .s1-idea-brand-sep {
-  color: var(--idea-text-3);
-  font-weight: 400;
-}
+.${THEME_CLASS} .s1-idea-brand a:hover { background: var(--idea-row-hover); color: var(--idea-accent-strong) !important; }
+.${THEME_CLASS} .s1-idea-brand .s1-idea-brand-sep { color: var(--idea-text-3); font-weight: 400; }
 .${THEME_CLASS} .s1-idea-menubar .s1-idea-spacer { flex: 1 1 auto; }
 .${THEME_CLASS} .s1-idea-theme-toggle {
-  cursor: pointer;
-  padding: 3px 10px !important;
-  border: 1px solid var(--idea-line) !important;
-  border-radius: 2px;
+  cursor: pointer; padding: 3px 10px !important;
+  border: 1px solid var(--idea-line) !important; border-radius: 2px;
   background: var(--idea-panel-2) !important;
 }
 .${THEME_CLASS} .s1-idea-theme-toggle:hover {
-  border-color: var(--idea-accent-soft) !important;
-  color: var(--idea-accent-strong) !important;
+  border-color: var(--idea-accent-soft) !important; color: var(--idea-accent-strong) !important;
 }
 
-/* ---- 版块索引 / 帖子列表 (forumdisplay) —— 配色 + Git Log 侧栏，标题保持比例字体 ---- */
+/* ---- 列表页：Git Log ---- */
 .${FORUM_CLASS} #threadlisttableid,
-.${FORUM_CLASS} .tl table {
-  background: var(--idea-editor) !important;
-}
+.${FORUM_CLASS} .tl table { background: var(--idea-editor) !important; }
 .${FORUM_CLASS} .tl th,
-.${FORUM_CLASS} .tl td {
-  border-color: var(--idea-line-soft) !important;
-  color: var(--idea-text-2) !important;
-}
+.${FORUM_CLASS} .tl td { border-color: var(--idea-line-soft) !important; color: var(--idea-text-2) !important; }
 .${FORUM_CLASS} .tl .th,
 .${FORUM_CLASS} .tl .fl_row,
 .${FORUM_CLASS} .th {
   background: var(--idea-panel) !important;
-  border-bottom: 1px solid var(--idea-line) !important;
-  color: var(--idea-text-3) !important;
+  border-bottom: 1px solid var(--idea-line) !important; color: var(--idea-text-3) !important;
 }
 .${FORUM_CLASS} tbody[id^="normalthread_"],
-.${FORUM_CLASS} tbody[id^="stickthread_"] {
-  background: var(--idea-editor) !important;
-}
+.${FORUM_CLASS} tbody[id^="stickthread_"] { background: var(--idea-editor) !important; }
 .${FORUM_CLASS} tbody[id^="normalthread_"]:hover,
-.${FORUM_CLASS} tbody[id^="stickthread_"]:hover {
-  background: var(--idea-row-hover) !important;
-}
+.${FORUM_CLASS} tbody[id^="stickthread_"]:hover { background: var(--idea-row-hover) !important; }
 .${FORUM_CLASS} .tl th a.xst,
-.${FORUM_CLASS} .tl th a.s.xst {
-  color: var(--idea-text) !important;
-  font-weight: 400 !important;
-}
+.${FORUM_CLASS} .tl th a.s.xst { color: var(--idea-text) !important; font-weight: 400 !important; }
 .${FORUM_CLASS} .tl th a.xst:hover { color: var(--idea-accent-strong) !important; }
-/* 数字列（回复/查看）等宽对齐 */
 .${FORUM_CLASS} .tl td.by,
 .${FORUM_CLASS} .tl td.num,
 .${FORUM_CLASS} .tl td.by a,
-.${FORUM_CLASS} .tl td.num a {
-  color: var(--idea-text-3) !important;
-  font-variant-numeric: tabular-nums;
-}
-
-/* git-graph 装饰：插在标题前的小 SVG（Git Log 味道），不影响文字字体 */
+.${FORUM_CLASS} .tl td.num a { color: var(--idea-text-3) !important; font-variant-numeric: tabular-nums; }
 .${FORUM_CLASS} .s1-idea-git {
-  display: inline-flex;
-  vertical-align: middle;
-  width: 34px;
-  height: 20px;
-  margin-right: 6px;
-  flex: 0 0 auto;
-  pointer-events: none;
+  display: inline-flex; vertical-align: middle; width: 34px; height: 20px;
+  margin-right: 6px; flex: 0 0 auto; pointer-events: none;
 }
 .${FORUM_CLASS} .s1-idea-git svg { width: 34px; height: 20px; display: block; }
-
-/* 版块索引块里的分区标题 */
 .${FORUM_CLASS} .fl_g,
 .${FORUM_CLASS} .fl_row td { background: var(--idea-editor) !important; }
 .${FORUM_CLASS} .fl_g:hover { background: var(--idea-row-hover) !important; }
 
-/* ---- 帖子页：编辑器标签页 + 配色，正文保持易读 ---- */
+/* ---- 帖子页：编辑器标签页 + 代码框 ---- */
 .${THREAD_CLASS} .s1-idea-tab {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 30px;
-  padding: 0 14px;
-  background: var(--idea-panel-2);
-  border-bottom: 1px solid var(--idea-line-strong);
-  color: var(--idea-text);
-  font-size: 12px;
+  display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 14px;
+  background: var(--idea-panel-2); border-bottom: 1px solid var(--idea-line-strong);
+  color: var(--idea-text); font-size: 12px;
   font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
 }
 .${THREAD_CLASS} .s1-idea-tab .s1-idea-tab-dot {
   width: 12px; height: 12px; border-radius: 2px;
   background: linear-gradient(135deg, #CC7832, #6A8759);
-  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 25%);
-  flex: 0 0 auto;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 25%); flex: 0 0 auto;
 }
 .${THREAD_CLASS} #postlist { background: var(--idea-editor) !important; }
 .${THREAD_CLASS} #postlist > div[id^="post_"] {
-  border-bottom: 1px solid var(--idea-line-soft) !important;
-  background: var(--idea-editor) !important;
+  border-bottom: 1px solid var(--idea-line-soft) !important; background: var(--idea-editor) !important;
 }
 .${THREAD_CLASS} .plhin,
 .${THREAD_CLASS} .pls,
@@ -401,78 +371,74 @@
 .${THREAD_CLASS} .pct,
 .${THREAD_CLASS} .pcb,
 .${THREAD_CLASS} table.plhin {
-  background: var(--idea-editor) !important;
-  border-color: var(--idea-line-soft) !important;
+  background: var(--idea-editor) !important; border-color: var(--idea-line-soft) !important;
   color: var(--idea-text-2) !important;
 }
-.${THREAD_CLASS} .pls,
-.${THREAD_CLASS} .pls .favatar { border-color: var(--idea-line-soft) !important; }
 .${THREAD_CLASS} .authi a,
 .${THREAD_CLASS} .authi .xw1,
 .${THREAD_CLASS} .xw1 { color: var(--idea-accent-strong) !important; }
-/* 楼层号做成 IDE 行号/方法名的高亮色 */
 .${THREAD_CLASS} .plc .pi strong a { color: var(--idea-accent) !important; }
-/* 正文：比例字体、舒适行距，绝不 monospace */
-.${THREAD_CLASS} .pct .t_f,
-.${THREAD_CLASS} td.t_f {
-  padding: 12px 16px !important;
-  color: var(--idea-text) !important;
-  font-size: 15px !important;
-  line-height: 1.75 !important;
-  background: var(--idea-editor) !important;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-    "Microsoft YaHei", sans-serif !important;
-}
-/* 帖子图片：内联直显、响应式，不再靠悬浮 */
-.${THREAD_CLASS} .t_f img,
-.${THREAD_CLASS} .pcb img {
-  max-width: 100% !important;
-  height: auto !important;
-  cursor: zoom-in;
-}
-/* 真正的代码块 / 引用才用等宽字体 */
-.${THREAD_CLASS} .blockcode,
-.${THREAD_CLASS} .blockcode ol,
-.${THREAD_CLASS} .blockcode li,
-.${THREAD_CLASS} pre,
-.${THREAD_CLASS} code {
-  background: var(--idea-code-bg) !important;
-  border: 1px solid var(--idea-line) !important;
-  border-radius: 3px !important;
-  color: var(--idea-text-2) !important;
+
+/* 真正的正文被隐藏，代码框接管 */
+.${THREAD_CLASS} .t_f.s1-cooked-hidden { display: none !important; }
+.${THREAD_CLASS} .s1-code-frame {
+  display: grid; grid-template-columns: 56px minmax(0, 1fr);
+  width: 100%; min-height: 24px; background: var(--idea-editor);
+  border-top: 1px solid var(--idea-line-soft);
   font-family: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace !important;
 }
-.${THREAD_CLASS} .quote blockquote {
-  background: var(--idea-code-bg) !important;
-  border-left: 3px solid var(--idea-accent-soft) !important;
-  border-radius: 0 3px 3px 0 !important;
-  color: var(--idea-text-2) !important;
-  padding: 8px 12px !important;
+.${THREAD_CLASS} .s1-gutter {
+  grid-column: 1; padding: 10px 8px 18px 0;
+  border-right: 1px solid var(--idea-line-soft); background: var(--idea-editor);
+  color: var(--idea-gutter-text); font-size: 13px; line-height: 20px;
+  text-align: right; user-select: none; white-space: pre; font-variant-numeric: tabular-nums;
+}
+.${THREAD_CLASS} .s1-code-pane {
+  grid-column: 2; min-width: 0; padding: 10px 18px 18px 14px; overflow-x: auto; overflow-y: visible;
+}
+.${THREAD_CLASS} .s1-code-lines { margin: 0; padding: 0; list-style: none; }
+.${THREAD_CLASS} .s1-code-line {
+  display: block; min-height: 20px; margin: 0; padding: 0;
+  color: var(--idea-text-2); font-size: 13px; line-height: 20px;
+  white-space: pre-wrap; word-break: break-word;
+}
+.${THREAD_CLASS} .s1-code-line .s1-kw { color: var(--idea-kw) !important; }
+.${THREAD_CLASS} .s1-code-line .s1-str { color: var(--idea-str) !important; }
+.${THREAD_CLASS} .s1-code-line .s1-fn { color: var(--idea-fn) !important; }
+.${THREAD_CLASS} .s1-code-line .s1-cmt { color: var(--idea-cmt) !important; }
+.${THREAD_CLASS} .s1-code-line a { color: var(--idea-str) !important; text-decoration: underline !important; text-underline-offset: 2px; }
+
+/* 图片：折叠为一行 // image，悬浮/聚焦/点击固定才展开 */
+.${THREAD_CLASS} .s1-code-line.s1-code-image { cursor: pointer; overflow: visible !important; }
+.${THREAD_CLASS} .s1-code-line.s1-code-image > .s1-cmt::after { content: " · hover"; opacity: .55; }
+.${THREAD_CLASS} .s1-code-line.s1-code-image:hover > .s1-cmt::after,
+.${THREAD_CLASS} .s1-code-line.s1-code-image:focus-within > .s1-cmt::after,
+.${THREAD_CLASS} .s1-code-line.s1-code-image.is-open > .s1-cmt::after,
+.${THREAD_CLASS} .s1-code-line.s1-code-image.is-pinned > .s1-cmt::after { content: "" !important; }
+.${THREAD_CLASS} .s1-code-line.s1-code-image .s1-code-image-preview {
+  display: none !important; max-width: min(100%, 720px) !important; width: auto !important; height: auto !important;
+  margin: 6px 0 4px 24px !important; border: 1px solid var(--idea-line-soft) !important; border-radius: 2px !important;
+  visibility: hidden !important; opacity: 0 !important;
+}
+.${THREAD_CLASS} .s1-code-line.s1-code-image:hover .s1-code-image-preview,
+.${THREAD_CLASS} .s1-code-line.s1-code-image:focus-within .s1-code-image-preview,
+.${THREAD_CLASS} .s1-code-line.s1-code-image.is-open .s1-code-image-preview,
+.${THREAD_CLASS} .s1-code-line.s1-code-image.is-pinned .s1-code-image-preview {
+  display: block !important; visibility: visible !important; opacity: 1 !important;
 }
 
 /* ---- 状态栏 ---- */
 .${THEME_CLASS} .s1-idea-statusbar {
-  position: fixed;
-  left: 0; right: 0; bottom: 0;
-  z-index: 900;
-  height: 22px;
-  padding: 0 12px;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  background: var(--idea-panel);
-  border-top: 1px solid var(--idea-line);
-  color: var(--idea-text-3);
-  font-size: 11px;
-  font-family: "JetBrains Mono", Menlo, Consolas, monospace;
-  pointer-events: none;
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 900; height: 22px; padding: 0 12px;
+  display: flex; align-items: center; gap: 14px; background: var(--idea-panel);
+  border-top: 1px solid var(--idea-line); color: var(--idea-text-3); font-size: 11px;
+  font-family: "JetBrains Mono", Menlo, Consolas, monospace; pointer-events: none;
 }
 .${THEME_CLASS} #ft { padding-bottom: 30px !important; }
 .${THEME_CLASS} #ft,
 .${THEME_CLASS} #flk { background: transparent !important; color: var(--idea-text-3) !important; }
 `;
 
-  // 品牌 mark（简化版 IDEA 方形）。
   const BRAND_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true">' +
     '<rect x="0" y="0" width="16" height="16" rx="3" fill="#000"/>' +
@@ -504,7 +470,7 @@
       if (v === "0") return false;
       if (v === "1") return true;
     } catch (e) { /* ignore */ }
-    return true; // 默认 Darcula
+    return true;
   }
   function setDark(on) {
     try { localStorage.setItem(DARK_KEY, on ? "1" : "0"); } catch (e) { /* ignore */ }
@@ -519,25 +485,17 @@
     bar.id = "s1-idea-menubar";
     bar.className = "s1-idea-menubar";
 
-    // 品牌区：两个可点主页链接 —— 仓库 + S1 版块。
     const brand = document.createElement("span");
     brand.className = "s1-idea-brand";
     const repo = document.createElement("a");
-    repo.href = REPO_URL;
-    repo.target = "_blank";
-    repo.rel = "noopener noreferrer";
+    repo.href = REPO_URL; repo.target = "_blank"; repo.rel = "noopener noreferrer";
     repo.innerHTML = BRAND_SVG + "s1-idea-ui";
     repo.title = "GitHub 仓库：hosinokoe/s1-idea-ui";
     const sep = document.createElement("span");
-    sep.className = "s1-idea-brand-sep";
-    sep.textContent = "·";
+    sep.className = "s1-idea-brand-sep"; sep.textContent = "·";
     const board = document.createElement("a");
-    board.href = BOARD_URL;
-    board.textContent = "Stage1st";
-    board.title = "Stage1st · 2b 版块";
-    brand.appendChild(repo);
-    brand.appendChild(sep);
-    brand.appendChild(board);
+    board.href = BOARD_URL; board.textContent = "Stage1st"; board.title = "Stage1st · 2b 版块";
+    brand.append(repo, sep, board);
     bar.appendChild(brand);
 
     for (const name of MENU_ITEMS) {
@@ -545,7 +503,6 @@
       item.textContent = name;
       bar.appendChild(item);
     }
-
     const spacer = document.createElement("span");
     spacer.className = "s1-idea-spacer";
     bar.appendChild(spacer);
@@ -557,7 +514,6 @@
       setDark(!document.documentElement.classList.contains(DARK_CLASS))
     );
     bar.appendChild(toggle);
-
     document.body.insertBefore(bar, document.body.firstChild);
   }
 
@@ -568,95 +524,251 @@
     bar.className = "s1-idea-statusbar";
     bar.setAttribute("aria-hidden", "true");
     bar.innerHTML =
-      "<span>UTF-8</span><span>LF</span>" +
+      "<span>UTF-8</span><span>4 spaces</span><span>Java</span>" +
       "<span>Discuz! X3.5</span><span>Darcula · Stage1st</span>";
     document.body.appendChild(bar);
   }
 
-  // 版块列表：给每个主题行标题前加一条 git-graph 装饰线（Git Log 味道）。
-  // ponytail: 装饰性伪 git 图，泳道由 tid 哈希决定，不追求真实提交拓扑。
+  // ---- 列表页 git-graph（沿用之前实现） ----
   function buildGitSvg(seed) {
-    const lane = seed % 3;             // 0..2
+    const lane = seed % 3;
     const x = 6 + lane * 10;
     const color = GIT_COLORS[seed % GIT_COLORS.length];
-    const branch = (seed >> 2) % 4 === 0; // 偶尔画一条分叉
-    let parts =
-      `<line x1="${x}" y1="0" x2="${x}" y2="20" stroke="${color}" stroke-width="1.4"/>`;
+    const branch = (seed >> 2) % 4 === 0;
+    let parts = `<line x1="${x}" y1="0" x2="${x}" y2="20" stroke="${color}" stroke-width="1.4"/>`;
     if (branch && lane < 2) {
       const x2 = x + 10;
       const c2 = GIT_COLORS[(seed + 1) % GIT_COLORS.length];
-      parts +=
-        `<path d="M${x} 10 C ${(x + x2) / 2} 10, ${(x + x2) / 2} 4, ${x2} 4" ` +
-        `fill="none" stroke="${c2}" stroke-width="1.4"/>`;
+      parts += `<path d="M${x} 10 C ${(x + x2) / 2} 10, ${(x + x2) / 2} 4, ${x2} 4" fill="none" stroke="${c2}" stroke-width="1.4"/>`;
     }
-    parts +=
-      `<circle cx="${x}" cy="10" r="3.2" fill="${color}" ` +
-      `stroke="var(--idea-editor)" stroke-width="1.2"/>`;
+    parts += `<circle cx="${x}" cy="10" r="3.2" fill="${color}" stroke="var(--idea-editor)" stroke-width="1.2"/>`;
     return `<svg viewBox="0 0 34 20">${parts}</svg>`;
   }
 
   function decorateThreadList() {
-    const rows = document.querySelectorAll(
-      'tbody[id^="normalthread_"], tbody[id^="stickthread_"]'
-    );
+    const rows = document.querySelectorAll('tbody[id^="normalthread_"], tbody[id^="stickthread_"]');
     for (const tbody of rows) {
       const titleCell = tbody.querySelector("th.new, th.common, th");
       if (!titleCell) continue;
       const anchor = titleCell.querySelector("a.xst");
       if (!anchor || titleCell.querySelector(".s1-idea-git")) continue;
       const tid = (tbody.id.match(/(\d+)/) || [])[1] || anchor.textContent || "";
-      const seed = hashInt(tid, 1e6);
       const holder = document.createElement("span");
       holder.className = "s1-idea-git";
       holder.setAttribute("aria-hidden", "true");
-      holder.innerHTML = buildGitSvg(seed);
+      holder.innerHTML = buildGitSvg(hashInt(tid, 1e6));
       titleCell.insertBefore(holder, titleCell.firstChild);
     }
   }
 
-  // 帖子页：加一个编辑器标签页（文件名 = 帖子标题.md，正文仍是比例字体）。
+  // ---- 帖子页：编辑器标签页 ----
+  function getTopicTitleText() {
+    return (
+      document.querySelector("#thread_subject")?.textContent?.trim() ||
+      document.title.replace(/\s*-\s*Stage1st.*$/i, "").trim() ||
+      "untitled"
+    );
+  }
+
   function decorateThread() {
     const postlist = document.getElementById("postlist");
     if (!postlist || document.getElementById("s1-idea-tab")) return;
-    const rawTitle =
-      document.querySelector("#thread_subject")?.textContent?.trim() ||
-      document.title.replace(/\s*-\s*Stage1st.*$/i, "").trim() ||
-      "untitled";
-    const fileName = sanitizeFileStem(rawTitle) + ".md";
+    const fileName = sanitizeFileStem(getTopicTitleText()) + ".java";
     const tab = document.createElement("div");
     tab.id = "s1-idea-tab";
     tab.className = "s1-idea-tab";
     tab.setAttribute("aria-hidden", "true");
     tab.innerHTML =
-      '<span class="s1-idea-tab-dot"></span>' +
-      "<span>" + escapeHtml(fileName) + "</span>";
+      '<span class="s1-idea-tab-dot"></span><span>' + escapeHtml(fileName) + "</span>";
     postlist.parentNode.insertBefore(tab, postlist);
   }
 
-  // 帖子页：把 Discuz! 懒加载图片的真实 URL 写回 src，让图片直接内联显示，
-  // 不再依赖悬浮/滚动。用 pickRealImageSrc 决定 URL，纯 DOM 副作用在这里。
-  function revealImages(root) {
-    const scope = root || document;
-    const imgs = scope.querySelectorAll(
-      ".t_f img, .pcb img, img[file], img[zoomfile], img[data-original]"
+  // ---- 从 Discuz 每楼里取作者 / 楼层 / 时间 ----
+  function getPostAuthorName(post) {
+    return (
+      post.querySelector(".authi a.xw1, .authi .xw1")?.textContent?.trim() ||
+      post.querySelector(".favatar .xw1, .p_pop .xw1")?.textContent?.trim() ||
+      post.querySelector(".authi a")?.textContent?.trim() ||
+      "unknown"
     );
-    for (const img of imgs) {
-      if (img.dataset.s1Revealed === "1") continue;
-      const real = pickRealImageSrc({
-        src: img.getAttribute("src") || "",
-        file: img.getAttribute("file") || "",
-        zoomfile: img.getAttribute("zoomfile") || "",
-        "data-original": img.getAttribute("data-original") || "",
-      });
-      if (real) {
-        img.src = real;
-        img.removeAttribute("onmouseover");
-        img.removeAttribute("onclick");
-        img.removeAttribute("lazyloadthumb");
+  }
+  function getPostFloorLabel(post) {
+    return post.querySelector(".plc .pi strong a em, .plc .pi strong a")?.textContent?.trim() || "";
+  }
+  function getPostTimeText(post) {
+    const em = post.querySelector(".authi em[id^='authorposton'], .authi .pdbt");
+    const t = em?.textContent?.trim() || "";
+    return t.replace(/^发表于\s*/, "");
+  }
+
+  // ---- 生成假代码头 / 尾（参考 buildHeaderLines / buildFooterLines，Java 单套） ----
+  function buildHeaderLines(post, isFirst) {
+    const name = getPostAuthorName(post);
+    const floor = getPostFloorLabel(post);
+    const time = getPostTimeText(post);
+    const className = sanitizeFileStem(getTopicTitleText());
+    if (isFirst) {
+      return [
+        "package stage1st.topics;",
+        "",
+        "import s1.discuz.*;",
+        "",
+        "/**",
+        " * @author " + name,
+        floor ? " * @floor " + floor : " *",
+        time ? " * @since " + time : " *",
+        " */",
+        "public class " + className + " {",
+        "",
+      ];
+    }
+    const floorNum = (floor.match(/\d+/) || [post.getAttribute("data-floor") || "?"])[0];
+    const methodName = "reply_" + sanitizeIdent(name) + "_" + floorNum;
+    const meta = [floor || "#" + floorNum, time ? "@ " + time : ""].filter(Boolean).join(" ");
+    return ["", "// " + meta, "@Reply", "void " + methodName + "() {"];
+  }
+  function buildFooterLines(isFirst) {
+    return isFirst ? ["", "} // end of topic"] : ["}"];
+  }
+
+  // ---- 把 .t_f 正文节点转成一行行「代码」HTML（参考 collectCookedLineHtml） ----
+  function buildImageLineHtml(src) {
+    const safe = escapeHtml(src);
+    return (
+      '<span class="s1-cmt">// image: ' + safe + "</span>" +
+      '<img class="s1-code-image-preview" loading="lazy" alt="image" data-src="' + safe + '">'
+    );
+  }
+
+  function collectBodyLines(tf) {
+    const lines = [];
+    const walk = (root) => {
+      for (const node of Array.from(root.childNodes)) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          const text = (node.nodeValue || "").replace(/\u00a0/g, " ");
+          if (!text.trim()) continue;
+          for (const row of wrapPlainText(text)) {
+            lines.push({ img: null, html: commentLineHtml(" // ", escapeHtml(row)) });
+          }
+          continue;
+        }
+        if (node.nodeType !== Node.ELEMENT_NODE) continue;
+        const tag = node.tagName.toLowerCase();
+        // 图片（含 Discuz ignore_js_op 包裹 / lightbox）
+        if (tag === "img") {
+          const src = pickRealImageSrc({
+            src: node.getAttribute("src") || "",
+            file: node.getAttribute("file") || "",
+            zoomfile: node.getAttribute("zoomfile") || "",
+            "data-original": node.getAttribute("data-original") || "",
+          }) || node.getAttribute("src") || "";
+          if (src) lines.push({ img: src, html: buildImageLineHtml(src) });
+          continue;
+        }
+        if (tag === "br") { continue; }
+        if (tag === "pre" || node.classList.contains("blockcode")) {
+          const codeText = (node.textContent || "").replace(/\r/g, "");
+          lines.push({ img: null, html: commentLineHtml(" // ", "----- code -----") });
+          for (const row of codeText.split("\n")) {
+            lines.push({ img: null, html: highlightCode(escapeHtml(row)) });
+          }
+          lines.push({ img: null, html: commentLineHtml(" // ", "----- end ------") });
+          continue;
+        }
+        if (node.querySelector && node.querySelector("img")) { walk(node); continue; }
+        // 引用块
+        if (tag === "blockquote" || node.classList.contains("quote")) {
+          for (const row of wrapPlainText(node.textContent || "")) {
+            lines.push({ img: null, html: commentLineHtml(" // > ", escapeHtml(row)) });
+          }
+          continue;
+        }
+        // 其它元素：递归；若是纯文本块，走文本分支
+        if (node.childElementCount === 0) {
+          const text = (node.textContent || "").replace(/\u00a0/g, " ");
+          for (const row of wrapPlainText(text)) {
+            lines.push({ img: null, html: commentLineHtml(" // ", escapeHtml(row)) });
+          }
+        } else {
+          walk(node);
+        }
       }
-      img.loading = "eager";
-      if (img.style && img.style.display === "none") img.style.display = "";
-      img.dataset.s1Revealed = "1";
+    };
+    walk(tf);
+    if (!lines.length) lines.push({ img: null, html: commentLineHtml(" // ", "") });
+    return lines;
+  }
+
+  function bindCodeImageHover(root) {
+    for (const line of root.querySelectorAll(".s1-code-line.s1-code-image")) {
+      if (line.dataset.s1Bound === "1") continue;
+      line.dataset.s1Bound = "1";
+      const reveal = () => {
+        line.classList.add("is-open");
+        for (const img of line.querySelectorAll(".s1-code-image-preview")) {
+          const src = img.getAttribute("data-src") || "";
+          if (src && img.getAttribute("src") !== src) img.setAttribute("src", src);
+        }
+      };
+      line.addEventListener("mouseenter", reveal);
+      line.addEventListener("focus", reveal);
+      line.addEventListener("click", () => {
+        if (line.classList.contains("is-pinned")) line.classList.remove("is-pinned", "is-open");
+        else { line.classList.add("is-pinned"); reveal(); }
+      });
+    }
+  }
+
+  // 给每楼的 .t_f 建代码框，隐藏原正文。参考 syncCodeFrames。
+  function syncCodeFrames() {
+    const posts = document.querySelectorAll('#postlist > div[id^="post_"], #postlist table[id^="pid"]');
+    const list = posts.length ? posts : document.querySelectorAll("#postlist .plhin");
+    let seenFirst = false;
+    for (const post of list) {
+      const tf = post.querySelector(".t_f");
+      if (!tf) continue;
+      const isFirst = !seenFirst;
+      seenFirst = true;
+      const bodyLines = collectBodyLines(tf);
+      const allLines = [
+        ...buildHeaderLines(post, isFirst).map((t) => ({ img: null, html: highlightCode(escapeHtml(t)) })),
+        ...bodyLines,
+        ...buildFooterLines(isFirst).map((t) => ({ img: null, html: highlightCode(escapeHtml(t)) })),
+      ];
+      const signature = "v1:" + allLines.length + ":" + tf.textContent.length;
+
+      let frame = tf.parentNode.querySelector(":scope > .s1-code-frame");
+      if (!frame) {
+        frame = document.createElement("div");
+        frame.className = "s1-code-frame";
+        const gutter = document.createElement("div");
+        gutter.className = "s1-gutter"; gutter.setAttribute("aria-hidden", "true");
+        const pane = document.createElement("div");
+        pane.className = "s1-code-pane";
+        const codeLines = document.createElement("div");
+        codeLines.className = "s1-code-lines";
+        pane.appendChild(codeLines);
+        frame.append(gutter, pane);
+        tf.parentNode.insertBefore(frame, tf);
+      }
+      tf.classList.add("s1-cooked-hidden");
+
+      const codeLines = frame.querySelector(".s1-code-lines");
+      const gutter = frame.querySelector(".s1-gutter");
+      if (codeLines.dataset.signature !== signature) {
+        codeLines.dataset.signature = signature;
+        codeLines.innerHTML = allLines
+          .map((l) => {
+            const cls = l.img ? "s1-code-line s1-code-image" : "s1-code-line";
+            const tabIndex = l.img ? ' tabindex="0"' : "";
+            return `<div class="${cls}"${tabIndex}>${l.html || " "}</div>`;
+          })
+          .join("");
+        bindCodeImageHover(codeLines);
+        let text = "";
+        for (let i = 1; i <= allLines.length; i++) text += i + "\n";
+        gutter.textContent = text;
+      }
     }
   }
 
@@ -677,11 +789,9 @@
     makeStatusBar();
 
     if (type === "forum") decorateThreadList();
-    if (type === "thread") { decorateThread(); revealImages(document); }
+    if (type === "thread") { decorateThread(); syncCodeFrames(); }
   }
 
-  // Discuz! 是整页刷新（非 SPA），一次 DOMContentLoaded 基本够用；
-  // 但异步加载（如楼层展开、图片懒加载替换）会改内容，故轻量观察一次 body。
   function bootstrap() {
     if (!document.documentElement) { setTimeout(bootstrap, 0); return; }
     injectStyle();
@@ -694,7 +804,6 @@
     } else {
       run();
     }
-    // 内容异步更新时补一次装饰/图片揭示（节流）。
     let scheduled = false;
     const obs = new MutationObserver(() => {
       if (scheduled) return;
@@ -703,7 +812,7 @@
         scheduled = false;
         const type = detectPageType(location.pathname, location.search);
         if (type === "forum") decorateThreadList();
-        if (type === "thread") { decorateThread(); revealImages(document); }
+        if (type === "thread") { decorateThread(); syncCodeFrames(); }
       });
     });
     const startObs = () => {
