@@ -379,6 +379,22 @@
 .${THREAD_CLASS} .xw1 { color: var(--idea-accent-strong) !important; }
 .${THREAD_CLASS} .plc .pi strong a { color: var(--idea-accent) !important; }
 
+/* 精简论坛头像/身份侧栏：作者已折进代码框类头，头像与个人资料块冗余（参考原作者隐藏头像） */
+.${THREAD_CLASS} .pls .avatar,
+.${THREAD_CLASS} .pls .favatar .avatar,
+.${THREAD_CLASS} .pls .p_pop,
+.${THREAD_CLASS} .pls .tns,
+.${THREAD_CLASS} .pls .pnpost,
+.${THREAD_CLASS} .pls .xg1,
+.${THREAD_CLASS} .pls dl.bbda,
+.${THREAD_CLASS} .pls .md_ctrl { display: none !important; }
+/* 作者列收窄成一条窄栏，只留用户名，像 IDE 里的作者注记 */
+.${THREAD_CLASS} td.pls {
+  width: 120px !important; min-width: 0 !important;
+  padding: 8px 10px !important; vertical-align: top !important;
+}
+.${THREAD_CLASS} .pls .authi { margin: 0 !important; padding: 0 !important; }
+
 /* 真正的正文被隐藏，代码框接管 */
 .${THREAD_CLASS} .t_f.s1-cooked-hidden { display: none !important; }
 .${THREAD_CLASS} .s1-code-frame {
@@ -632,14 +648,11 @@
   }
 
   // ---- 把 .t_f 正文节点转成一行行「代码」HTML（参考 collectCookedLineHtml） ----
-  // 预览图直接带真实 src（loading=lazy 避免一次性全部预载），悬浮/聚焦的显示
-  // 纯靠 CSS 切 display，无需 JS 再填 src——这正是参考脚本「悬浮即显」的做法。
-  function buildImageLineHtml(src) {
-    const safe = escapeHtml(src);
-    return (
-      '<span class="s1-cmt">// image: ' + safe + "</span>" +
-      '<img class="s1-code-image-preview" loading="lazy" alt="image" src="' + safe + '">'
-    );
+  // 图片行只生成 // image 注释 HTML，真实预览图用原节点克隆（见 syncCodeFrames），
+  // 因为原 <img> 已被 Discuz 以正确的 referer/会话加载，直接克隆最稳，不用猜 URL。
+  function buildImageLabelHtml(src) {
+    const safe = escapeHtml(src || "");
+    return '<span class="s1-cmt">// image: ' + safe + "</span>";
   }
 
   function collectBodyLines(tf) {
@@ -664,7 +677,7 @@
             zoomfile: node.getAttribute("zoomfile") || "",
             "data-original": node.getAttribute("data-original") || "",
           }) || node.getAttribute("src") || "";
-          if (src) lines.push({ img: src, html: buildImageLineHtml(src) });
+          lines.push({ imgNode: node, html: buildImageLabelHtml(src) });
           continue;
         }
         if (tag === "br") { continue; }
@@ -752,11 +765,32 @@
         codeLines.dataset.signature = signature;
         codeLines.innerHTML = allLines
           .map((l) => {
-            const cls = l.img ? "s1-code-line s1-code-image" : "s1-code-line";
-            const tabIndex = l.img ? ' tabindex="0"' : "";
+            const cls = l.imgNode ? "s1-code-line s1-code-image" : "s1-code-line";
+            const tabIndex = l.imgNode ? ' tabindex="0"' : "";
             return `<div class="${cls}"${tabIndex}>${l.html || " "}</div>`;
           })
           .join("");
+        // 为图片行追加「克隆的原始 <img>」作预览：原图已被 Discuz 以正确
+        // referer/会话加载好，克隆它比重新猜 URL 更可靠（悬浮必出图）。
+        const lineEls = codeLines.querySelectorAll(".s1-code-line");
+        allLines.forEach((l, i) => {
+          if (!l.imgNode || !lineEls[i]) return;
+          const preview = l.imgNode.cloneNode(true);
+          preview.className = "s1-code-image-preview";
+          preview.removeAttribute("width");
+          preview.removeAttribute("height");
+          preview.removeAttribute("style");
+          preview.removeAttribute("onmouseover");
+          preview.removeAttribute("onclick");
+          const real = pickRealImageSrc({
+            src: l.imgNode.getAttribute("src") || "",
+            file: l.imgNode.getAttribute("file") || "",
+            zoomfile: l.imgNode.getAttribute("zoomfile") || "",
+            "data-original": l.imgNode.getAttribute("data-original") || "",
+          });
+          if (real) preview.src = real;
+          lineEls[i].appendChild(preview);
+        });
         bindCodeImageHover(codeLines);
         let text = "";
         for (let i = 1; i <= allLines.length; i++) text += i + "\n";

@@ -11,7 +11,8 @@
 - 🌿 **版块列表 → Git Log** — 每个主题行标题前生成伪 git-graph 装饰线（泳道 / 颜色由 tid 哈希决定），营造 IDE 版本控制视图的味道
 - 📑 **帖子页 → 编辑器标签页** — 帖子顶部注入编辑器 tab（文件名 = `帖子标题.java`）
 - 💻 **帖子正文 → 代码编辑器** — 每楼正文渲染成带**行号 gutter** 的代码框：1 楼生成假 Java 头（`package` / `import` / Javadoc `@author @floor @since` / `public class 标题`），回帖变成 `void reply_作者_楼层() { … }` 方法；正文文字化为 `//` 注释行，真代码块夹在 `// ----- code -----` 之间，配语法高亮（关键字 / 字符串 / 方法名 / 注释）
-- 🖼️ **图片折叠预览** — 图片渲染成一行 `// image` 注释，默认收起，**悬浮 / 聚焦 / 点击固定**才展开预览（沿用参考脚本的折叠交互）
+- 🙈 **精简论坛头像** — 隐藏每楼左侧的头像与个人资料块（作者已折进代码框的类头），作者列收窄成一条窄栏（照搬参考脚本隐藏头像的思路）
+- 🖼️ **图片折叠预览** — 图片渲染成一行 `// image` 注释，默认收起，**悬浮 / 聚焦 / 点击固定**才展开；预览图是原帖 `<img>` 的克隆（已由 Discuz 以正确 referer 加载），保证悬浮必出图
 - 📊 **状态栏** — 底部常驻 `UTF-8 · 4 spaces · Java · Discuz! X3.5 · Darcula` 状态条
 
 ## 兼容站点
@@ -57,7 +58,7 @@ s1-idea-ui/
 - **样式覆盖** — 一段 `RAW_CSS` 用 CSS 变量定义 Darcula / IntelliJ Light 两套配色，通过根节点 class（`.s1-idea-dark`）切换
 - **DOM 装饰** — 列表页用 `decorateThreadList()` 给主题行注入伪 git-graph SVG（`buildGitSvg` + `hashInt` 定泳道/颜色），帖子页用 `decorateThread()` 注入编辑器标签页（`sanitizeFileStem` 生成文件名）
 - **正文代码化** — 帖子页 `syncCodeFrames()` 给每楼 `.t_f` 建一个「行号 gutter + 代码窗格」代码框并隐藏原正文：`buildHeaderLines()` 生成 1 楼类头 / 回帖方法头，`collectBodyLines()` 把正文文本转 `//` 注释行、`<pre>` 转代码块、`<img>` 转 `// image` 折叠行，`highlightCode()` 做正则语法着色
-- **图片折叠** — 图片行默认收起，`bindCodeImageHover()` 绑定悬浮 / 聚焦即时预览、点击固定展开；真实地址由 `pickRealImageSrc()` 从 `file` / `zoomfile` / `data-original` 挑出
+- **图片折叠** — 图片行默认收起，`bindCodeImageHover()` 处理点击固定，悬浮 / 聚焦即时预览由纯 CSS 负责；预览图是原帖 `<img>` 的克隆（原图已由 Discuz 以正确 referer 加载好，克隆比重新猜 URL 更可靠）
 - **非 SPA 适配** — Discuz! 为整页刷新，脚本在 `DOMContentLoaded` 后套用一次，并挂一个节流的 `MutationObserver` 兜住异步加载（如置顶折叠展开）时的列表更新
 
 ## 已知限制
