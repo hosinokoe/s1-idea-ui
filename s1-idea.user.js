@@ -420,6 +420,7 @@
 }
 .${THREAD_CLASS} .s1-code-pane {
   grid-column: 2; min-width: 0; padding: 10px 18px 18px 14px; overflow-x: auto; overflow-y: visible;
+  user-select: text; -webkit-user-select: text;
 }
 .${THREAD_CLASS} .s1-code-lines { margin: 0; padding: 0; list-style: none; }
 .${THREAD_CLASS} .s1-code-line {
@@ -434,22 +435,19 @@
 .${THREAD_CLASS} .s1-code-line a { color: var(--idea-str) !important; text-decoration: underline !important; text-underline-offset: 2px; }
 
 /* 图片：折叠为一行 // image，悬浮/聚焦/点击固定才展开 */
-.${THREAD_CLASS} .s1-code-line.s1-code-image { cursor: pointer; overflow: visible !important; }
-.${THREAD_CLASS} .s1-code-line.s1-code-image > .s1-cmt::after { content: " · hover"; opacity: .55; }
+/* 图片：一行 // image 注释，预览图默认折叠，悬停/聚焦该行才显示（文字始终可选中） */
+.${THREAD_CLASS} .s1-code-line.s1-code-image { overflow: visible !important; padding: 2px 0 !important; }
+.${THREAD_CLASS} .s1-code-line.s1-code-image > .s1-cmt::after { content: " · hover 查看"; opacity: .55; }
 .${THREAD_CLASS} .s1-code-line.s1-code-image:hover > .s1-cmt::after,
-.${THREAD_CLASS} .s1-code-line.s1-code-image:focus-within > .s1-cmt::after,
-.${THREAD_CLASS} .s1-code-line.s1-code-image.is-open > .s1-cmt::after,
-.${THREAD_CLASS} .s1-code-line.s1-code-image.is-pinned > .s1-cmt::after { content: "" !important; }
+.${THREAD_CLASS} .s1-code-line.s1-code-image:focus-within > .s1-cmt::after { content: "" !important; }
 .${THREAD_CLASS} .s1-code-line.s1-code-image .s1-code-image-preview {
   display: none !important; max-width: min(100%, 720px) !important; width: auto !important; height: auto !important;
   margin: 6px 0 4px 24px !important; border: 1px solid var(--idea-line-soft) !important; border-radius: 2px !important;
-  visibility: hidden !important; opacity: 0 !important;
+  cursor: zoom-in;
 }
 .${THREAD_CLASS} .s1-code-line.s1-code-image:hover .s1-code-image-preview,
-.${THREAD_CLASS} .s1-code-line.s1-code-image:focus-within .s1-code-image-preview,
-.${THREAD_CLASS} .s1-code-line.s1-code-image.is-open .s1-code-image-preview,
-.${THREAD_CLASS} .s1-code-line.s1-code-image.is-pinned .s1-code-image-preview {
-  display: block !important; visibility: visible !important; opacity: 1 !important;
+.${THREAD_CLASS} .s1-code-line.s1-code-image:focus-within .s1-code-image-preview {
+  display: block !important;
 }
 
 /* ---- 状态栏 ---- */
@@ -644,7 +642,13 @@
     );
   }
   function getPostFloorLabel(post) {
-    return post.querySelector(".plc .pi strong a em, .plc .pi strong a")?.textContent?.trim() || "";
+    const direct = post.querySelector(".plc .pi strong a em, .plc .pi strong a")?.textContent?.trim();
+    if (direct) return direct;
+    // 兜底：从楼层信息块 .pi 全文里抠数字（如 "沙发"/"3#" 等）。
+    const piText = post.querySelector(".plc .pi, .pi")?.textContent || "";
+    const m = piText.match(/(\d+)\s*#|#\s*(\d+)|第?\s*(\d+)\s*楼/);
+    if (m) return (m[1] || m[2] || m[3]) + "#";
+    return "";
   }
   function getPostTimeText(post) {
     const em = post.querySelector(".authi em[id^='authorposton'], .authi .pdbt");
@@ -653,7 +657,7 @@
   }
 
   // ---- 生成假代码头 / 尾（参考 buildHeaderLines / buildFooterLines，Java 单套） ----
-  function buildHeaderLines(post, isFirst) {
+  function buildHeaderLines(post, isFirst, floorIndex) {
     const name = getPostAuthorName(post);
     const floor = getPostFloorLabel(post);
     const time = getPostTimeText(post);
@@ -673,7 +677,10 @@
         "",
       ];
     }
-    const floorNum = (floor.match(/\d+/) || [post.getAttribute("data-floor") || "?"])[0];
+    const floorNum =
+      (floor.match(/\d+/) || [])[0] ||
+      post.getAttribute("data-floor") ||
+      (Number.isInteger(floorIndex) ? String(floorIndex + 1) : "n");
     const methodName = "reply_" + sanitizeIdent(name) + "_" + floorNum;
     const meta = [floor || "#" + floorNum, time ? "@ " + time : ""].filter(Boolean).join(" ");
     return ["", "// " + meta, "@Reply", "void " + methodName + "() {"];
@@ -750,12 +757,14 @@
   }
 
   // 悬浮 / 聚焦显示由 CSS 负责；JS 只处理「点击固定 / 取消固定」。
+  // 点击预览图在新标签打开原图；click 只绑在 <img> 上，不拦截整行，文字可自由选中。
   function bindCodeImageHover(root) {
-    for (const line of root.querySelectorAll(".s1-code-line.s1-code-image")) {
-      if (line.dataset.s1Bound === "1") continue;
-      line.dataset.s1Bound = "1";
-      line.addEventListener("click", () => {
-        line.classList.toggle("is-pinned");
+    for (const img of root.querySelectorAll(".s1-code-image-preview")) {
+      if (img.dataset.s1Bound === "1") continue;
+      img.dataset.s1Bound = "1";
+      img.addEventListener("click", () => {
+        const src = img.getAttribute("src") || img.getAttribute("file") || "";
+        if (src) window.open(src, "_blank", "noopener");
       });
     }
   }
@@ -764,18 +773,18 @@
   function syncCodeFrames() {
     const posts = document.querySelectorAll('#postlist > div[id^="post_"], #postlist table[id^="pid"]');
     const list = posts.length ? posts : document.querySelectorAll("#postlist .plhin");
-    let seenFirst = false;
+    let floorIndex = 0;
     for (const post of list) {
       const tf = post.querySelector(".t_f");
       if (!tf) continue;
-      const isFirst = !seenFirst;
-      seenFirst = true;
+      const isFirst = floorIndex === 0;
       const bodyLines = collectBodyLines(tf);
       const allLines = [
-        ...buildHeaderLines(post, isFirst).map((t) => ({ img: null, html: highlightCode(escapeHtml(t)) })),
+        ...buildHeaderLines(post, isFirst, floorIndex).map((t) => ({ img: null, html: highlightCode(escapeHtml(t)) })),
         ...bodyLines,
         ...buildFooterLines(isFirst).map((t) => ({ img: null, html: highlightCode(escapeHtml(t)) })),
       ];
+      floorIndex += 1;
       const signature = "v1:" + allLines.length + ":" + tf.textContent.length;
 
       let frame = tf.parentNode.querySelector(":scope > .s1-code-frame");
@@ -801,8 +810,7 @@
         codeLines.innerHTML = allLines
           .map((l) => {
             const cls = l.imgNode ? "s1-code-line s1-code-image" : "s1-code-line";
-            const tabIndex = l.imgNode ? ' tabindex="0"' : "";
-            return `<div class="${cls}"${tabIndex}>${l.html || " "}</div>`;
+            return `<div class="${cls}">${l.html || " "}</div>`;
           })
           .join("");
         // 为图片行追加「克隆的原始 <img>」作预览：原图已被 Discuz 以正确
