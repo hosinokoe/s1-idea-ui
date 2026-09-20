@@ -290,6 +290,15 @@
 }
 .${THEME_CLASS} #nv,
 .${THEME_CLASS} #nv a { background: transparent !important; color: var(--idea-text-2) !important; }
+/* 右上角个人头像隐藏（顶栏用户区），用户名/菜单保留 */
+.${THEME_CLASS} #toptb .avt img,
+.${THEME_CLASS} #toptb .avt .avatar,
+.${THEME_CLASS} #hd .avt img,
+.${THEME_CLASS} #um .avt img,
+.${THEME_CLASS} .vwmy .avt img,
+.${THEME_CLASS} #myprompt_menu .avt img { display: none !important; }
+.${THEME_CLASS} #toptb .avt,
+.${THEME_CLASS} #hd .avt { width: 0 !important; margin: 0 !important; padding: 0 !important; }
 .${THEME_CLASS} .s1-idea-menubar {
   display: flex; align-items: center; gap: 1px; height: 28px; padding: 0 8px;
   background: var(--idea-panel); border-bottom: 1px solid var(--idea-line);
@@ -543,6 +552,32 @@
       "<span>UTF-8</span><span>4 spaces</span><span>Java</span>" +
       "<span>Discuz! X3.5</span><span>Darcula · Stage1st</span>";
     document.body.appendChild(bar);
+  }
+
+  // 把站点 favicon 换成 IDEA 风格方块（参考原作者 makeFavicon）。
+  const FAVICON_SVG =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="32" height="32">' +
+    '<rect x="0" y="0" width="16" height="16" rx="3" fill="#000"/>' +
+    '<rect x="2" y="2" width="12" height="12" rx="2" fill="none" stroke="#4A9FD8" stroke-width="1.4"/>' +
+    '<rect x="3.5" y="10.5" width="5" height="1.4" fill="#4A9FD8"/>' +
+    "</svg>";
+  function makeFavicon() {
+    const head = document.head;
+    if (!head) return;
+    const href = "data:image/svg+xml," + encodeURIComponent(FAVICON_SVG);
+    // 干掉站点原有 icon，避免它盖回去。
+    for (const link of head.querySelectorAll('link[rel~="icon"], link[rel="shortcut icon"]')) {
+      if (link.id !== "s1-idea-favicon") link.remove();
+    }
+    let icon = document.getElementById("s1-idea-favicon");
+    if (!icon) {
+      icon = document.createElement("link");
+      icon.id = "s1-idea-favicon";
+      icon.rel = "icon";
+      icon.type = "image/svg+xml";
+      head.appendChild(icon);
+    }
+    if (icon.getAttribute("href") !== href) icon.setAttribute("href", href);
   }
 
   // ---- 列表页 git-graph（沿用之前实现） ----
@@ -814,6 +849,7 @@
 
     makeMenuBar();
     makeStatusBar();
+    makeFavicon();
 
     if (type === "forum") decorateThreadList();
     if (type === "thread") { decorateThread(); syncCodeFrames(); }

@@ -8,6 +8,7 @@
 
 - 🌙 **Darcula 主题** — 默认深色 Darcula 配色，一键切换 IntelliJ Light，选择记忆在 `localStorage`
 - 🧭 **IDE 菜单条** — 顶部注入 `File Edit View …` 风格假菜单栏；品牌区是两个可点主页：GitHub 仓库（`hosinokoe/s1-idea-ui`）与 Stage1st `2b` 版块
+- 🔷 **IDEA 风 favicon** — 站点图标换成 IDEA 风格方块（参考原作者 `makeFavicon`），并隐藏右上角个人头像
 - 🌿 **版块列表 → Git Log** — 每个主题行标题前生成伪 git-graph 装饰线（泳道 / 颜色由 tid 哈希决定），营造 IDE 版本控制视图的味道
 - 📑 **帖子页 → 编辑器标签页** — 帖子顶部注入编辑器 tab（文件名 = `帖子标题.java`）
 - 💻 **帖子正文 → 代码编辑器** — 每楼正文渲染成带**行号 gutter** 的代码框：1 楼生成假 Java 头（`package` / `import` / Javadoc `@author @floor @since` / `public class 标题`），回帖变成 `void reply_作者_楼层() { … }` 方法；正文文字化为 `//` 注释行，真代码块夹在 `// ----- code -----` 之间，配语法高亮（关键字 / 字符串 / 方法名 / 注释）
